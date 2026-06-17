@@ -678,7 +678,7 @@ function processRawRows(rawRows, sourceName) {
   document.getElementById('periodo').textContent=
     `${DATA.length.toLocaleString('es-AR')} registros · ${MLBL[ms[0]]}–${MLBL[ms[ms.length-1]]} · ${fmtM(tot)} activos (Firm+Ing+Rep)`;
   const totalRaw=cnt+skipped;
-  status.textContent=`✓ ${sourceName} · ${cnt.toLocaleString('es-AR')} de ${totalRaw.toLocaleString('es-AR')} filas${skipped?` (${skipped.toLocaleString('es-AR')} sin importe, ok)`:''}`;
+  status.textContent=`✓ ${sourceName} · ${totalRaw.toLocaleString('es-AR')} filas`;
   render();
 }
 

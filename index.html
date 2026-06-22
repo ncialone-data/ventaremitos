@@ -57,7 +57,13 @@ header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-be
 .xlsx-btn:hover{background:var(--acc-d)}
 .xlsx-btn.loading{opacity:.6;pointer-events:none}
 .file-status{font-size:12px;color:var(--mut)}
-.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+.kpis{display:grid;grid-template-columns:1.8fr 1fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px}
+.kpi .k-val.full{font-size:clamp(14px,1.8vw,22px)}
+.kpi-prog{margin-top:10px}
+.kpi-prog .prog-track{height:5px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;margin-top:4px}
+.kpi-prog .prog-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--acc),var(--acc-d));transition:width 1s cubic-bezier(.22,1,.36,1)}
+.kpi-prog .prog-lbl{font-size:10px;color:var(--mut2);display:flex;justify-content:space-between;margin-top:4px}
+.mom-up{color:#b8ff36}.mom-dn{color:#f87171}.mom-neu{color:var(--mut)}
 .kpi{background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--line);
   border-radius:var(--r);padding:18px 20px;position:relative;overflow:hidden}
 .kpi::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 60%,rgba(184,255,54,.05));pointer-events:none}
@@ -134,6 +140,9 @@ svg{display:block;width:100%;overflow:visible}
 .t-v{color:var(--acc);font-family:"IBM Plex Mono",monospace}
 @media(max-width:960px){
   .tipos{grid-template-columns:repeat(3,1fr)!important}
+}
+@media(max-width:1050px){
+  .kpis{grid-template-columns:repeat(3,1fr)}
 }
 @media(max-width:860px){
   .kpis{grid-template-columns:repeat(2,1fr)}
@@ -311,6 +320,7 @@ const empsSorted=[...empSet].sort((a,b)=>empTot[b]-empTot[a]);
 empsSorted.forEach((e,i)=>COLOR[e]=PAL[i%PAL.length]);
 
 const fmt=n=>n.toLocaleString('es-AR',{maximumFractionDigits:0});
+const fmtFull=n=>'$'+n.toLocaleString('es-AR',{maximumFractionDigits:0});
 const fmtM=n=>{
   const m=n/1e6;
   if(Math.abs(m)>=1000) return (m/1000).toLocaleString("es-AR",{maximumFractionDigits:2})+" MM";
@@ -320,6 +330,8 @@ const fmtM=n=>{
 const fmtPct=n=>n.toFixed(1)+'%';
 
 let mesFilter=null, empFilter=null;
+const DAYAGG={};
+const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empFilter)r=r.filter(d=>d.p===empFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empFilter)r=r.filter(d=>d.p===empFilter);return r;}
 
@@ -342,11 +354,52 @@ function render(){
   document.getElementById('scope').style.color=empFilter?COLOR[empFilter]:"var(--teal)";
   document.getElementById('clearEmpBtn').classList.toggle('hide',!empFilter);
   document.getElementById('rankHint').style.display=empFilter?'none':'inline';
-  document.getElementById('kpis').innerHTML=[
-    ['Venta activa',fmtM(totalVta),empFilter||'todas las empresas',true,false],
-    ['Margen bruto',fmtPct(margenAvg),'$'+fmtM(totalVta-totalCos)+' neto',false,true],
-    ['Clientes únicos',clientes.toLocaleString('es-AR'),'en remitos firmados',false,false],
-  ].map(([l,v,s,a,mg])=>`<div class="kpi ${a?'acc':mg?'mrg':''}"><div class="k-lbl">${l}</div><div class="k-val">${v}</div><div class="k-sub">${s}</div></div>`).join('');
+  // ── Objetivo mensual ──────────────────────────────────────────────────
+  const OBJ=2500000000;
+  const objMesKey=mesFilter||MESES[MESES.length-1];
+  const objMesVta=mesFilter?totalVta:DATA.filter(d=>d.m===objMesKey&&ACTIVOS.includes(d.e)).reduce((s,d)=>s+d.v,0);
+  const objPct=Math.min(objMesVta/OBJ*100,100);
+  const objRestante=Math.max(OBJ-objMesVta,0);
+  const getObjColor=p=>{
+    if(p<30)return'#f87171';
+    if(p<75)return'#f59e0b';
+    const t=Math.min((p-75)/25,1);
+    return`hsl(${(142+(80-142)*t).toFixed(0)},${(72+(100-72)*t).toFixed(0)}%,${(22+(60-22)*t).toFixed(0)}%)`;
+  };
+  const objColor=getObjColor(objPct);
+  const objCard=`<div class="kpi"><div class="k-lbl">Objetivo mensual · ${MLBL[objMesKey]||objMesKey}</div>
+    <div class="k-val" style="color:${objColor}">${objPct.toFixed(1)}%</div>
+    <div class="k-sub">${objRestante>0?'Falta '+fmtM(objRestante):'✓ Objetivo alcanzado'}</div>
+    <div class="kpi-prog">
+      <div class="prog-track"><div class="prog-fill" style="width:${objPct.toFixed(1)}%;background:${objColor}"></div></div>
+      <div class="prog-lbl"><span>$0</span><span>$2.500 MM</span></div>
+    </div></div>`;
+  // ── MoM: mes en curso vs mes anterior a la misma fecha ────────────────
+  const curMesKey=mesFilter||MESES[MESES.length-1];
+  const prevMesKey=getPrevMonth(curMesKey);
+  const curDayData=DAYAGG[curMesKey]||{};
+  const prevDayData=DAYAGG[prevMesKey]||{};
+  const maxDay=Object.keys(curDayData).length?Math.max(...Object.keys(curDayData).map(Number)):31;
+  const curMesVta=Object.values(curDayData).reduce((s,v)=>s+v,0);
+  const prevMesVta=Object.entries(prevDayData).filter(([d])=>+d<=maxDay).reduce((s,[,v])=>s+v,0);
+  const momDelta=prevMesVta>0?(curMesVta-prevMesVta)/prevMesVta*100:null;
+  const momCls=momDelta===null?'mom-neu':momDelta>=0?'mom-up':'mom-dn';
+  const momSign=momDelta===null?'—':momDelta>=0?`+${momDelta.toFixed(1)}%`:`${momDelta.toFixed(1)}%`;
+  const momCard=`<div class="kpi"><div class="k-lbl">vs. mes anterior · día ${maxDay}</div>
+    <div class="k-val ${momCls}">${momSign}</div>
+    <div class="k-sub">${MLBL[curMesKey]||curMesKey}: ${fmtM(curMesVta)} · ${MLBL[prevMesKey]||prevMesKey}: ${fmtM(prevMesVta)}</div></div>`;
+  // ── Render ────────────────────────────────────────────────────────────
+  document.getElementById('kpis').innerHTML=
+    `<div class="kpi acc"><div class="k-lbl">Venta activa</div>
+      <div class="k-val full">${fmtFull(totalVta)}</div>
+      <div class="k-sub">${empFilter||'todas las empresas'}</div></div>`+
+    objCard+momCard+
+    `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
+      <div class="k-val">${fmtPct(margenAvg)}</div>
+      <div class="k-sub">$${fmtM(totalVta-totalCos)} neto</div></div>
+    <div class="kpi"><div class="k-lbl">Clientes únicos</div>
+      <div class="k-val">${clientes.toLocaleString('es-AR')}</div>
+      <div class="k-sub">en remitos activos</div></div>`;
   renderRanking(Rfirm);
   renderMonth(rowsNoMes().filter(d=>ACTIVOS.includes(d.e)));
   renderClientes(Rfirm,totalVta);
@@ -621,23 +674,23 @@ function processRawRows(rawRows, sourceName) {
   const agg = {}, pAgg = {};
   let cnt = 0, skipped = 0;
   for(const r of rawRows) {
-    const _n=s=>{const t=String(s||'').trim();const d=t.lastIndexOf('.');const c=t.lastIndexOf(',');if(c>d)return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;if(d>c)return parseFloat(t.replace(/,/g,''))||0;return parseFloat(t)||0;};
+    const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;}; // AR siempre
     const vta = _n(r['VENTA IMPORTE']);
     if(!vta) { skipped++; continue; }
     let fecha = r['FECHA'];
     if(!fecha) continue;
-    let mes;
+    let mes; let dayNum=1;
     {
       const fs=String(fecha).trim();
-      const iso=fs.match(/^(\d{4})-(\d{2})-\d{2}/);
+      const iso=fs.match(/^(\d{4})-(\d{2})-(\d{2})/);
       if(iso){
-        mes=`${iso[1]}-${iso[2]}`;
+        mes=`${iso[1]}-${iso[2]}`; dayNum=parseInt(iso[3]);
       } else {
         const p=fs.split('/');
         if(p.length>=3){
           const y=p[2].length===4?p[2]:`20${p[2]}`;
           const mo=p[1].padStart(2,'0');
-          mes=`${y}-${mo}`;
+          mes=`${y}-${mo}`; dayNum=parseInt(p[0])||1;
         } else { skipped++; continue; }
       }
     }
@@ -647,6 +700,10 @@ function processRawRows(rawRows, sourceName) {
     const emp = EL[String(r['EMP']||'').trim()]||String(r['EMP']||'').trim();
     const cos = _n(r['COSTO IMPORTE']);
     const qty = _n(r['CANTIDAD']);
+    if(['Firmada','Ingresada','Reparto'].includes(estado)){
+      if(!DAYAGG[mes])DAYAGG[mes]={};
+      DAYAGG[mes][dayNum]=(DAYAGG[mes][dayNum]||0)+vta;
+    }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
     agg[key].vta+=vta; agg[key].cos+=cos; agg[key].qty+=qty;
@@ -657,6 +714,7 @@ function processRawRows(rawRows, sourceName) {
     cnt++;
   }
   DATA.length=0;
+  for(const k in DAYAGG)delete DAYAGG[k];
   for(const k in agg){
     const a=agg[k];
     const mrg=a.vta>0?+((a.vta-a.cos)/a.vta*100).toFixed(1):0;

@@ -357,7 +357,11 @@ function render(){
   const totalVta=Rfirm.reduce((s,d)=>s+d.v,0);
   const totalCos=Rfirm.reduce((s,d)=>s+d.o,0);
   const margenAvg=totalVta>0?(totalVta-totalCos)/totalVta*100:0;
-  const clientes=new Set(Rfirm.map(d=>d.c)).size;
+  const clientes=new Set(
+    REMS_RAW.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.estado)
+      &&(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
+    .map(d=>d.rawcli)
+  ).size;
   document.getElementById('scope').textContent=empFilter||"Todas";
   document.getElementById('scope').style.color=empFilter?COLOR[empFilter]:"var(--teal)";
   document.getElementById('clearEmpBtn').classList.toggle('hide',!empFilter);
@@ -729,8 +733,9 @@ function processRawRows(rawRows, sourceName) {
     const estado = String(r['ESTADO']||'Firmada').trim();
     const emp = EL[String(r['EMP']||'').trim()]||String(r['EMP']||'').trim();
     const comp = String(r['COMPROBANTE']||'').trim();
+    const rawcli = String(r['CLIENTE']||'').trim();
     const _ck=`${comp}|${mes}|${emp}|${estado}`;
-    if(comp&&!_seenComp.has(_ck)){_seenComp.add(_ck);REMS_RAW.push({comp,estado,mes,emp});}
+    if(comp&&!_seenComp.has(_ck)){_seenComp.add(_ck);REMS_RAW.push({comp,estado,mes,emp,rawcli});}
     const cos = _n(r['COSTO IMPORTE']);
     const qty = _n(r['CANTIDAD']);
     if(['Firmada','Ingresada','Reparto'].includes(estado)){

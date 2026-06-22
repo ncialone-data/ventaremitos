@@ -58,12 +58,19 @@ header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-be
 .xlsx-btn.loading{opacity:.6;pointer-events:none}
 .file-status{font-size:12px;color:var(--mut)}
 .kpis{display:grid;grid-template-columns:1.8fr 1fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px}
-.kpi .k-val.full{font-size:clamp(14px,1.8vw,22px)}
+.kpi .k-val.full{font-size:clamp(20px,2.8vw,38px);line-height:1.05}
 .kpi-prog{margin-top:10px}
 .kpi-prog .prog-track{height:5px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;margin-top:4px}
 .kpi-prog .prog-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--acc),var(--acc-d));transition:width 1s cubic-bezier(.22,1,.36,1)}
 .kpi-prog .prog-lbl{font-size:10px;color:var(--mut2);display:flex;justify-content:space-between;margin-top:4px}
 .mom-up{color:#b8ff36}.mom-dn{color:#f87171}.mom-neu{color:var(--mut)}
+.mom-bars{margin-top:10px;display:flex;flex-direction:column;gap:5px}
+.mom-bar-row{display:grid;grid-template-columns:26px 1fr 46px;align-items:center;gap:6px}
+.mom-bar-lbl{font-size:10px;color:var(--mut2);text-align:right;font-family:"IBM Plex Mono",monospace}
+.mom-bar-track{height:9px;background:rgba(255,255,255,.06);border-radius:5px;overflow:hidden}
+.mom-bar-fill{height:100%;border-radius:5px;transition:width 1s cubic-bezier(.22,1,.36,1)}
+.mom-bar-fill.prev-bar{background:rgba(255,255,255,.22)}
+.mom-bar-amt{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--mut);text-align:right;white-space:nowrap}
 .kpi{background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--line);
   border-radius:var(--r);padding:18px 20px;position:relative;overflow:hidden}
 .kpi::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 60%,rgba(184,255,54,.05));pointer-events:none}
@@ -384,10 +391,26 @@ function render(){
   const prevMesVta=Object.entries(prevDayData).filter(([d])=>+d<=maxDay).reduce((s,[,v])=>s+v,0);
   const momDelta=prevMesVta>0?(curMesVta-prevMesVta)/prevMesVta*100:null;
   const momCls=momDelta===null?'mom-neu':momDelta>=0?'mom-up':'mom-dn';
-  const momSign=momDelta===null?'—':momDelta>=0?`+${momDelta.toFixed(1)}%`:`${momDelta.toFixed(1)}%`;
+  const momArrow=momDelta===null?'':'momDelta>=0?'↑ ':'↓ ';
+  const momSign=momDelta===null?'Sin datos':momDelta>=0?`↑ +${momDelta.toFixed(1)}%`:`↓ ${momDelta.toFixed(1)}%`;
+  const momMax=Math.max(curMesVta,prevMesVta)||1;
+  const curBarW=(curMesVta/momMax*100).toFixed(1);
+  const prevBarW=(prevMesVta/momMax*100).toFixed(1);
+  const curBarCol=momDelta===null?'rgba(255,255,255,.18)':momDelta>=0?'#b8ff36':'#f87171';
   const momCard=`<div class="kpi"><div class="k-lbl">vs. mes anterior · día ${maxDay}</div>
-    <div class="k-val ${momCls}">${momSign}</div>
-    <div class="k-sub">${MLBL[curMesKey]||curMesKey}: ${fmtM(curMesVta)} · ${MLBL[prevMesKey]||prevMesKey}: ${fmtM(prevMesVta)}</div></div>`;
+    <div class="k-val ${momCls}" style="font-size:clamp(16px,2vw,26px)">${momSign}</div>
+    <div class="mom-bars">
+      <div class="mom-bar-row">
+        <span class="mom-bar-lbl">${MLBL[prevMesKey]||'Ant'}</span>
+        <div class="mom-bar-track"><div class="mom-bar-fill prev-bar" style="width:${prevBarW}%"></div></div>
+        <span class="mom-bar-amt">${fmtM(prevMesVta)}</span>
+      </div>
+      <div class="mom-bar-row">
+        <span class="mom-bar-lbl">${MLBL[curMesKey]||'Act'}</span>
+        <div class="mom-bar-track"><div class="mom-bar-fill" style="width:${curBarW}%;background:${curBarCol}"></div></div>
+        <span class="mom-bar-amt">${fmtM(curMesVta)}</span>
+      </div>
+    </div></div>`;
   // ── Render ────────────────────────────────────────────────────────────
   document.getElementById('kpis').innerHTML=
     `<div class="kpi acc"><div class="k-lbl">Venta activa</div>
@@ -736,11 +759,12 @@ function processRawRows(rawRows, sourceName) {
   const mn2=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   ms.forEach(m=>{const num=parseInt(m.split('-')[1])-1;MLBL[m]=mn2[num]||m;});
   const seg=document.getElementById('mesSeg');
-  seg.innerHTML=`<button data-m="" class="on">Todo el año</button>`+ms.map(m=>`<button data-m="${m}">${MLBL[m]}</button>`).join('');
+  const _lastM=ms[ms.length-1];
+  seg.innerHTML=`<button data-m="">Todo el año</button>`+ms.map(m=>`<button data-m="${m}"${m===_lastM?' class="on"':''}>${MLBL[m]}</button>`).join('');
   seg.querySelectorAll('button').forEach(b=>{
     b.onclick=()=>{mesFilter=b.dataset.m||null;seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));render();};
   });
-  mesFilter=null; empFilter=null;
+  mesFilter=ms[ms.length-1]; empFilter=null;
   const tot=DATA.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.e)).reduce((s,d)=>s+d.v,0);
   document.getElementById('periodo').textContent=
     `${DATA.length.toLocaleString('es-AR')} registros · ${MLBL[ms[0]]}–${MLBL[ms[ms.length-1]]} · ${fmtM(tot)} activos (Firm+Ing+Rep)`;

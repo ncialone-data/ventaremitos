@@ -391,14 +391,13 @@ function render(){
   const prevMesVta=Object.entries(prevDayData).filter(([d])=>+d<=maxDay).reduce((s,[,v])=>s+v,0);
   const momDelta=prevMesVta>0?(curMesVta-prevMesVta)/prevMesVta*100:null;
   const momCls=momDelta===null?'mom-neu':momDelta>=0?'mom-up':'mom-dn';
-  const momArrow=momDelta===null?'':'momDelta>=0?'↑ ':'↓ ';
   const momSign=momDelta===null?'Sin datos':momDelta>=0?`↑ +${momDelta.toFixed(1)}%`:`↓ ${momDelta.toFixed(1)}%`;
   const momMax=Math.max(curMesVta,prevMesVta)||1;
   const curBarW=(curMesVta/momMax*100).toFixed(1);
   const prevBarW=(prevMesVta/momMax*100).toFixed(1);
   const curBarCol=momDelta===null?'rgba(255,255,255,.18)':momDelta>=0?'#b8ff36':'#f87171';
   const momCard=`<div class="kpi"><div class="k-lbl">vs. mes anterior · día ${maxDay}</div>
-    <div class="k-val ${momCls}" style="font-size:clamp(16px,2vw,26px)">${momSign}</div>
+    <div class="k-val ${momCls}" style="font-size:clamp(16px,2vw,28px)">${momSign}</div>
     <div class="mom-bars">
       <div class="mom-bar-row">
         <span class="mom-bar-lbl">${MLBL[prevMesKey]||'Ant'}</span>
@@ -411,6 +410,7 @@ function render(){
         <span class="mom-bar-amt">${fmtM(curMesVta)}</span>
       </div>
     </div></div>`;
+
   // ── Render ────────────────────────────────────────────────────────────
   document.getElementById('kpis').innerHTML=
     `<div class="kpi acc"><div class="k-lbl">Venta activa</div>

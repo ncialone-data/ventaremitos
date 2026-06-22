@@ -903,6 +903,16 @@ const _tot=_firm.reduce((s,d)=>s+d.v,0);
 document.getElementById('periodo').textContent=
   `${DATA.length.toLocaleString('es-AR')} registros · ene–jun 2026 · ${fmtM(_tot)} activos (Firm+Ing+Rep)`;
 
+// Restaurar preferencia ANTES del primer render
+try{
+  if(localStorage.getItem('theme')==='light'){
+    document.body.classList.add('light');
+    document.getElementById('themeIcon').textContent='🌙';
+    document.getElementById('themeLabel').textContent='Modo oscuro';
+    PAL[0]='#2563eb'; ESTADO_COL['Firmada']='#2563eb';
+    empsSorted.forEach((e,i)=>COLOR[e]=PAL[i%PAL.length]);
+  }
+}catch(e){}
 window.addEventListener('mousemove',e=>{if(tip.style.opacity==='1')moveTip(e);});
 render();
 
@@ -920,16 +930,7 @@ function toggleTheme(){
   document.getElementById('themeLabel').textContent=isLight?'Modo oscuro':'Modo claro';
   try{localStorage.setItem('theme',isLight?'light':'dark');}catch(e){}
 }
-// Restaurar preferencia
-try{
-  if(localStorage.getItem('theme')==='light'){
-    document.body.classList.add('light');
-    document.getElementById('themeIcon').textContent='🌙';
-    document.getElementById('themeLabel').textContent='Modo oscuro';
-    PAL[0]='#2563eb'; ESTADO_COL['Firmada']='#2563eb';
-    empsSorted.forEach((e,i)=>COLOR[e]=PAL[i%PAL.length]);
-  }
-}catch(e){}
+
 </script>
 </body>
 </html>

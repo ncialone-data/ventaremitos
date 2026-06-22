@@ -386,17 +386,18 @@ function render(){
   const prevMesKey=getPrevMonth(curMesKey);
   const curDayData=DAYAGG[curMesKey]||{};
   const prevDayData=DAYAGG[prevMesKey]||{};
-  const maxDay=Object.keys(curDayData).length?Math.max(...Object.keys(curDayData).map(Number)):31;
-  const curMesVta=Object.values(curDayData).reduce((s,v)=>s+v,0);
-  const prevMesVta=Object.entries(prevDayData).filter(([d])=>+d<=maxDay).reduce((s,[,v])=>s+v,0);
-  const momDelta=prevMesVta>0?(curMesVta-prevMesVta)/prevMesVta*100:null;
+  const hasDayData=Object.keys(curDayData).length>0;
+  const maxDay=hasDayData?Math.max(...Object.keys(curDayData).map(Number)):null;
+  const curMesVta=hasDayData?Object.values(curDayData).reduce((s,v)=>s+v,0):0;
+  const prevMesVta=hasDayData?Object.entries(prevDayData).filter(([d])=>+d<=maxDay).reduce((s,[,v])=>s+v,0):0;
+  const momDelta=hasDayData&&prevMesVta>0?(curMesVta-prevMesVta)/prevMesVta*100:null;
   const momCls=momDelta===null?'mom-neu':momDelta>=0?'mom-up':'mom-dn';
-  const momSign=momDelta===null?'Sin datos':momDelta>=0?`↑ +${momDelta.toFixed(1)}%`:`↓ ${momDelta.toFixed(1)}%`;
+  const momSign=!hasDayData?'Actualizá los datos':momDelta===null?'Sin mes anterior':momDelta>=0?`↑ +${momDelta.toFixed(1)}%`:`↓ ${momDelta.toFixed(1)}%`;
   const momMax=Math.max(curMesVta,prevMesVta)||1;
-  const curBarW=(curMesVta/momMax*100).toFixed(1);
-  const prevBarW=(prevMesVta/momMax*100).toFixed(1);
+  const curBarW=hasDayData?(curMesVta/momMax*100).toFixed(1):'0';
+  const prevBarW=hasDayData?(prevMesVta/momMax*100).toFixed(1):'0';
   const curBarCol=momDelta===null?'rgba(255,255,255,.18)':momDelta>=0?'#b8ff36':'#f87171';
-  const momCard=`<div class="kpi"><div class="k-lbl">vs. mes anterior · día ${maxDay}</div>
+  const momCard=`<div class="kpi"><div class="k-lbl">vs. mes anterior${maxDay!==null?" · día "+maxDay:""}</div>
     <div class="k-val ${momCls}" style="font-size:clamp(16px,2vw,28px)">${momSign}</div>
     <div class="mom-bars">
       <div class="mom-bar-row">

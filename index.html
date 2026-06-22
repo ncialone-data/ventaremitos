@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Venta Remitos</title>
+<title>Remitos 2026</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Outfit:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -172,7 +172,7 @@ svg{display:block;width:100%;overflow:visible}
 
 <header>
   <div class="brand">
-    <h1>Venta <b>Remitos</b></h1>
+    <h1>Remitos <b>2026</b></h1>
     <div class="sub"><span class="dot"></span><span id="periodo"></span></div>
   </div>
   <div class="scope">
@@ -621,23 +621,32 @@ function processRawRows(rawRows, sourceName) {
   const agg = {}, pAgg = {};
   let cnt = 0, skipped = 0;
   for(const r of rawRows) {
-    const vta = parseFloat(String(r['VENTA IMPORTE']||'').replace(/\./g,'').replace(',','.'))||0;
+    const _n=s=>{const t=String(s||'').trim();const d=t.lastIndexOf('.');const c=t.lastIndexOf(',');if(c>d)return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;if(d>c)return parseFloat(t.replace(/,/g,''))||0;return parseFloat(t)||0;};
+    const vta = _n(r['VENTA IMPORTE']);
     if(!vta) { skipped++; continue; }
     let fecha = r['FECHA'];
     if(!fecha) continue;
     let mes;
-    const parts=String(fecha).split(/[\/\-]/);
-    if(parts.length>=3){
-      const y=parts[2].length===4?parts[2]:`20${parts[2]}`;
-      const mo=parts[1].length<=2?parts[1]:parts[0];
-      mes=`${y}-${mo.padStart(2,'0')}`;
-    } else continue;
+    {
+      const fs=String(fecha).trim();
+      const iso=fs.match(/^(\d{4})-(\d{2})-\d{2}/);
+      if(iso){
+        mes=`${iso[1]}-${iso[2]}`;
+      } else {
+        const p=fs.split('/');
+        if(p.length>=3){
+          const y=p[2].length===4?p[2]:`20${p[2]}`;
+          const mo=p[1].padStart(2,'0');
+          mes=`${y}-${mo}`;
+        } else { skipped++; continue; }
+      }
+    }
     const cli = sc(r['CLIENTE']);
     let rub = String(r['RUBRO']||'OTROS').trim(); if(rub==='-'||!rub)rub='OTROS';
     const estado = String(r['ESTADO']||'Firmada').trim();
     const emp = EL[String(r['EMP']||'').trim()]||String(r['EMP']||'').trim();
-    const cos = parseFloat(String(r['COSTO IMPORTE']||'').replace(/\./g,'').replace(',','.'))||0;
-    const qty = parseFloat(String(r['CANTIDAD']||'').replace(/\./g,'').replace(',','.'))||0;
+    const cos = _n(r['COSTO IMPORTE']);
+    const qty = _n(r['CANTIDAD']);
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
     agg[key].vta+=vta; agg[key].cos+=cos; agg[key].qty+=qty;

@@ -697,6 +697,7 @@ function processRawRows(rawRows, sourceName) {
   const sp = p => {const pp=String(p||'').trim().split(' ');return(/^[A-Z0-9\-]{2,8}$/.test(pp[0])?pp.slice(1).join(' '):String(p||'').trim()).slice(0,48)};
   const agg = {}, pAgg = {};
   let cnt = 0, skipped = 0;
+  for(const k in DAYAGG)delete DAYAGG[k];
   for(const r of rawRows) {
     const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;}; // AR siempre
     const vta = _n(r['VENTA IMPORTE']);
@@ -738,7 +739,6 @@ function processRawRows(rawRows, sourceName) {
     cnt++;
   }
   DATA.length=0;
-  for(const k in DAYAGG)delete DAYAGG[k];
   for(const k in agg){
     const a=agg[k];
     const mrg=a.vta>0?+((a.vta-a.cos)/a.vta*100).toFixed(1):0;

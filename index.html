@@ -338,6 +338,7 @@ const fmtPct=n=>n.toFixed(1)+'%';
 
 let mesFilter=null, empFilter=null;
 const DAYAGG={};
+const REMS_RAW=[];  // comprobantes únicos: {comp,estado,mes,emp}
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empFilter)r=r.filter(d=>d.p===empFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empFilter)r=r.filter(d=>d.p===empFilter);return r;}
@@ -583,8 +584,10 @@ function renderMargen(R){
 function renderEstados(R,total){
   const map={};
   R.forEach(d=>map[d.e]=(map[d.e]||0)+d.v);
+  // Conteo por comprobantes únicos (no por filas agregadas)
   const cnt={};
-  R.forEach(d=>cnt[d.e]=(cnt[d.e]||0)+1);
+  REMS_RAW.filter(d=>(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
+    .forEach(d=>cnt[d.estado]=(cnt[d.estado]||0)+1);
   const ORDER=['Firmada','Ingresada','Reparto','Transito','Anulada'];
   const arr=Object.entries(map).sort((a,b)=>ORDER.indexOf(a[0])-ORDER.indexOf(b[0]));
   document.getElementById('estadoNote').textContent=(mesFilter?MLBL[mesFilter]:'año completo')+(empFilter?' · '+empFilter:'');
@@ -698,6 +701,8 @@ function processRawRows(rawRows, sourceName) {
   const agg = {}, pAgg = {};
   let cnt = 0, skipped = 0;
   for(const k in DAYAGG)delete DAYAGG[k];
+  REMS_RAW.length=0;
+  const _seenComp=new Set();
   for(const r of rawRows) {
     const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;}; // AR siempre
     const vta = _n(r['VENTA IMPORTE']);
@@ -723,6 +728,9 @@ function processRawRows(rawRows, sourceName) {
     let rub = String(r['RUBRO']||'OTROS').trim(); if(rub==='-'||!rub)rub='OTROS';
     const estado = String(r['ESTADO']||'Firmada').trim();
     const emp = EL[String(r['EMP']||'').trim()]||String(r['EMP']||'').trim();
+    const comp = String(r['COMPROBANTE']||'').trim();
+    const _ck=`${comp}|${mes}|${emp}|${estado}`;
+    if(comp&&!_seenComp.has(_ck)){_seenComp.add(_ck);REMS_RAW.push({comp,estado,mes,emp});}
     const cos = _n(r['COSTO IMPORTE']);
     const qty = _n(r['CANTIDAD']);
     if(['Firmada','Ingresada','Reparto'].includes(estado)){

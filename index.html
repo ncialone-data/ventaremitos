@@ -903,9 +903,11 @@ const _tot=_firm.reduce((s,d)=>s+d.v,0);
 document.getElementById('periodo').textContent=
   `${DATA.length.toLocaleString('es-AR')} registros · ene–jun 2026 · ${fmtM(_tot)} activos (Firm+Ing+Rep)`;
 
-// Restaurar preferencia ANTES del primer render
+// Restaurar preferencia ANTES del primer render (default: claro)
 try{
-  if(localStorage.getItem('theme')==='light'){
+  const _saved=localStorage.getItem('theme');
+  const _useLight=_saved===null?true:_saved==='light'; // default claro
+  if(_useLight){
     document.body.classList.add('light');
     document.getElementById('themeIcon').textContent='🌙';
     document.getElementById('themeLabel').textContent='Modo oscuro';
@@ -914,6 +916,13 @@ try{
   }
 }catch(e){}
 window.addEventListener('mousemove',e=>{if(tip.style.opacity==='1')moveTip(e);});
+// Seleccionar el mes en curso (último mes disponible) antes del primer render
+if(MESES.length){
+  mesFilter=MESES[MESES.length-1];
+  document.querySelectorAll('#mesSeg button').forEach(b=>{
+    b.classList.toggle('on', b.dataset.m===mesFilter);
+  });
+}
 render();
 
 // Auto-actualizar al abrir
@@ -925,7 +934,7 @@ function toggleTheme(){
   PAL[0]=isLight?'#2563eb':'#b8ff36';
   ESTADO_COL['Firmada']=isLight?'#2563eb':'#b8ff36';
   empsSorted.forEach((e,i)=>COLOR[e]=PAL[i%PAL.length]);
-  if(DATA.length)render();
+  render();
   document.getElementById('themeIcon').textContent=isLight?'🌙':'☀️';
   document.getElementById('themeLabel').textContent=isLight?'Modo oscuro':'Modo claro';
   try{localStorage.setItem('theme',isLight?'light':'dark');}catch(e){}

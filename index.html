@@ -53,6 +53,10 @@ body.light .t-v{color:var(--acc)}
 body.light .track{background:rgba(0,0,0,.07)}
 body.light .mom-bar-track{background:rgba(0,0,0,.07)}
 body.light .prog-track{background:rgba(0,0,0,.08)}
+.pend-track{height:6px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;margin-top:10px}
+body.light .pend-track{background:rgba(0,0,0,.08)}
+.pend-fill{height:100%;border-radius:3px;transition:width .9s cubic-bezier(.22,1,.36,1)}
+.kpi.pend-alert{border-color:#f87171}
 .theme-toggle{
   background:var(--panel);border:1px solid var(--line2);
   border-radius:20px;padding:6px 12px;cursor:pointer;
@@ -272,6 +276,18 @@ svg{display:block;width:100%;overflow:visible}
 </div>
 
 <div class="kpis" id="kpis"></div>
+
+<div style="margin-bottom:16px">
+  <div class="c-head" style="margin-bottom:10px">
+    <span class="c-title" style="font-size:14px">Pedidos pendientes de facturar</span>
+    <span class="c-note" id="pendientesNote">actualizá los datos para cargar</span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px" id="pendientesKpis">
+    <div class="kpi"><div class="k-lbl">—</div></div>
+    <div class="kpi"><div class="k-lbl">—</div></div>
+    <div class="kpi pend-alert"><div class="k-lbl">—</div></div>
+  </div>
+</div>
 
 <div class="card" style="margin-bottom:14px">
   <div class="c-head">
@@ -883,20 +899,86 @@ function parseCsvText(csv) {
   });
 }
 
+let PEND_DATA=null;
+
+function renderPendientes(){
+  if(!PEND_DATA)return;
+  const d=PEND_DATA;
+  const isLight=document.body.classList.contains('light');
+  const teal=isLight?'#0891b2':'#34e3c6';
+  const red='#f87171';
+  const pctOk=d.tot>0?(d.cntOk/d.tot*100):0;
+  const pctAl=100-pctOk;
+  document.getElementById('pendientesNote').textContent=`${d.tot} pedidos únicos · al día de hoy`;
+  document.getElementById('pendientesKpis').innerHTML=`
+    <div class="kpi">
+      <div class="k-lbl">Pedidos pendientes</div>
+      <div style="margin-top:8px;display:flex;align-items:baseline;gap:6px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:clamp(20px,2.4vw,32px);font-weight:600;color:${teal}">${d.cntOk.toLocaleString('es-AR')}</span>
+        <span style="font-size:15px;color:var(--mut)">/ ${d.tot.toLocaleString('es-AR')}</span>
+      </div>
+      <div class="k-sub">menos de 45 días · ${pctOk.toFixed(1)}%</div>
+      <div class="pend-track"><div class="pend-fill" style="width:${pctOk.toFixed(1)}%;background:${teal}"></div></div>
+    </div>
+    <div class="kpi">
+      <div class="k-lbl">Importe pendientes</div>
+      <div class="k-val" style="color:${teal};font-size:clamp(16px,1.8vw,24px);margin-top:8px">${fmtFull(d.vtaOk)}</div>
+      <div class="k-sub">pedidos &lt; 45 días</div>
+      <div style="height:1px;background:var(--line);margin:10px 0"></div>
+      <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em">Total pipeline</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;color:var(--tx);margin-top:3px">${fmtFull(d.vtaOk+d.vtaAl)}</div>
+    </div>
+    <div class="kpi pend-alert">
+      <div class="k-lbl" style="color:${red}">Vencidos +45 días</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:clamp(20px,2.4vw,32px);font-weight:600;color:${red};margin-top:8px">${d.cntAl.toLocaleString('es-AR')}</div>
+      <div class="k-sub" style="color:${red}">${fmtFull(d.vtaAl)}</div>
+      <div class="pend-track"><div class="pend-fill" style="width:${pctAl.toFixed(1)}%;background:${red}"></div></div>
+    </div>`;
+}
+
+function processPendientesRows(rawRows){
+  const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;};
+  const today=new Date(); today.setHours(0,0,0,0);
+  const peds={};
+  for(const r of rawRows){
+    const num=String(r['NUMERO PEDIDO']||'').trim();
+    if(!num)continue;
+    const total=_n(r['TOTAL']);
+    const fs=String(r['FECHA PEDIDO']||'').trim();
+    let fd=null;
+    const iso=fs.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(iso){fd=new Date(+iso[1],+iso[2]-1,+iso[3]);}
+    else{const p=fs.split('/');if(p.length>=3){const y=p[2].length===4?+p[2]:2000+ +p[2];fd=new Date(y,+p[1]-1,+p[0]);}}
+    if(!fd||isNaN(fd))continue;
+    if(!peds[num]){peds[num]={fecha:fd,total:0};}
+    peds[num].total+=total;
+  }
+  let cntOk=0,vtaOk=0,cntAl=0,vtaAl=0;
+  for(const k in peds){
+    const p=peds[k];
+    const dias=Math.floor((today-p.fecha)/86400000);
+    if(dias<45){cntOk++;vtaOk+=p.total;}else{cntAl++;vtaAl+=p.total;}
+  }
+  PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,tot:cntOk+cntAl};
+  renderPendientes();
+}
+
 document.getElementById('sheetsBtn').addEventListener('click', async function(){
   const btn = this;
   const status = document.getElementById('fileStatus');
   btn.classList.add('loading');
   btn.textContent = '↻ Cargando…';
   status.textContent = '';
-  const url = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=0&single=true&output=csv`;
+  const urlRem = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=0&single=true&output=csv`;
+  const urlPend = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1646279255&single=true&output=csv`;
   try {
-    const res = await fetch(url);
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
-    const rows = parseCsvText(text);
-    if(rows.length===0) throw new Error('El sheet no devolvió datos');
-    processRawRows(rows, 'Google Sheets');
+    const [resRem, resPend] = await Promise.all([fetch(urlRem), fetch(urlPend)]);
+    if(!resRem.ok) throw new Error(`HTTP ${resRem.status}`);
+    const [textRem, textPend] = await Promise.all([resRem.text(), resPend.text()]);
+    const rowsRem = parseCsvText(textRem);
+    if(rowsRem.length===0) throw new Error('El sheet no devolvió datos');
+    processRawRows(rowsRem, 'Google Sheets');
+    if(resPend.ok){const rowsPend=parseCsvText(textPend);if(rowsPend.length>0)processPendientesRows(rowsPend);}
   } catch(err) {
     status.textContent = `⚠ Error al conectar: ${err.message}`;
     console.error(err);
@@ -953,6 +1035,7 @@ function toggleTheme(){
   ESTADO_COL['Firmada']=isLight?'#2563eb':'#b8ff36';
   empsSorted.forEach((e,i)=>COLOR[e]=PAL[i%PAL.length]);
   render();
+  renderPendientes();
   document.getElementById('themeIcon').textContent=isLight?'🌙':'☀️';
   document.getElementById('themeLabel').textContent=isLight?'Modo oscuro':'Modo claro';
   try{localStorage.setItem('theme',isLight?'light':'dark');}catch(e){}

@@ -514,6 +514,7 @@ function render(){
   renderEstados(R,R.reduce((s,d)=>s+d.v,0));
   renderMix(R,totalVta);
   renderMatrix();
+  if(PEND_RAW)calcPendientesFiltered();
 }
 
 function renderRanking(R){
@@ -900,6 +901,7 @@ function parseCsvText(csv) {
 }
 
 let PEND_DATA=null;
+let PEND_RAW=null;
 
 function renderPendientes(){
   if(!PEND_DATA)return;
@@ -929,21 +931,37 @@ function renderPendientes(){
     </div>
     <div class="kpi pend-alert">
       <div class="k-lbl" style="color:${red}">Vencidos +45 días</div>
-      <div style="display:flex;align-items:baseline;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:8px;gap:6px">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:clamp(20px,2.4vw,32px);font-weight:600;color:${red}">${d.cntAl.toLocaleString('es-AR')}</span>
-        <span style="color:${red};font-size:20px;font-weight:300">·</span>
-        <span style="font-family:'IBM Plex Mono',monospace;font-size:clamp(15px,1.6vw,20px);font-weight:600;color:${red}">${fmtFull(d.vtaAl)}</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:clamp(15px,1.8vw,22px);font-weight:600;color:${red};text-align:right">${fmtFull(d.vtaAl)}</span>
       </div>
       <div class="k-sub" style="color:${red}">Mayor a 45 días · ${pctAl.toFixed(1)}%</div>
       <div class="pend-track"><div class="pend-fill" style="width:${pctAl.toFixed(1)}%;background:${red}"></div></div>
     </div>`;
 }
 
-function processPendientesRows(rawRows){
+function calcPendientesFiltered(){
+  if(!PEND_RAW||!PEND_RAW.length)return;
   const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;};
   const today=new Date(); today.setHours(0,0,0,0);
+  // apply mesFilter and rubFilter to raw pendientes rows
+  let filtered=PEND_RAW;
+  if(mesFilter){
+    filtered=filtered.filter(r=>{
+      const fs=String(r['FECHA PEDIDO']||'').trim();
+      const iso=fs.match(/^(\d{4})-(\d{2})/);
+      if(iso)return `${iso[1]}-${iso[2]}`===mesFilter;
+      const p=fs.split('/');
+      if(p.length>=3){const y=p[2].length===4?p[2]:'20'+p[2];return `${y}-${p[1].padStart(2,'0')}`===mesFilter;}
+      return false;
+    });
+  }
+  if(rubFilter){
+    filtered=filtered.filter(r=>String(r['RUBRO']||'').trim()===rubFilter);
+  }
+  // group by NUMERO PEDIDO
   const peds={};
-  for(const r of rawRows){
+  for(const r of filtered){
     const num=String(r['NUMERO PEDIDO']||'').trim();
     if(!num)continue;
     const total=_n(r['TOTAL']);
@@ -964,6 +982,11 @@ function processPendientesRows(rawRows){
   }
   PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,tot:cntOk+cntAl};
   renderPendientes();
+}
+
+function processPendientesRows(rawRows){
+  PEND_RAW=rawRows;
+  calcPendientesFiltered();
 }
 
 document.getElementById('sheetsBtn').addEventListener('click', async function(){

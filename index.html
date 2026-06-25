@@ -917,13 +917,13 @@ function renderPendientes(){
         <span style="font-family:'IBM Plex Mono',monospace;font-size:clamp(20px,2.4vw,32px);font-weight:600;color:${teal}">${d.cntOk.toLocaleString('es-AR')}</span>
         <span style="font-size:15px;color:var(--mut)">/ ${d.tot.toLocaleString('es-AR')}</span>
       </div>
-      <div class="k-sub">menos de 45 días · ${pctOk.toFixed(1)}%</div>
+      <div class="k-sub">hasta 45 días · ${pctOk.toFixed(1)}%</div>
       <div class="pend-track"><div class="pend-fill" style="width:${pctOk.toFixed(1)}%;background:${teal}"></div></div>
     </div>
     <div class="kpi">
       <div class="k-lbl">Importe pendientes</div>
       <div class="k-val" style="color:${teal};font-size:clamp(16px,1.8vw,24px);margin-top:8px">${fmtFull(d.vtaOk)}</div>
-      <div class="k-sub">pedidos &lt; 45 días</div>
+      <div class="k-sub">pedidos ≤ 45 días</div>
       <div style="height:1px;background:var(--line);margin:10px 0"></div>
       <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em">Total pipeline</div>
       <div style="font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;color:var(--tx);margin-top:3px">${fmtFull(d.vtaOk+d.vtaAl)}</div>
@@ -957,7 +957,7 @@ function processPendientesRows(rawRows){
   for(const k in peds){
     const p=peds[k];
     const dias=Math.floor((today-p.fecha)/86400000);
-    if(dias<45){cntOk++;vtaOk+=p.total;}else{cntAl++;vtaAl+=p.total;}
+    if(dias<=45){cntOk++;vtaOk+=p.total;}else if(dias>45){cntAl++;vtaAl+=p.total;}
   }
   PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,tot:cntOk+cntAl};
   renderPendientes();

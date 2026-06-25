@@ -946,16 +946,6 @@ function calcPendientesFiltered(){
   const today=new Date(); today.setHours(0,0,0,0);
   // apply mesFilter and rubFilter to raw pendientes rows
   let filtered=PEND_RAW;
-  if(mesFilter){
-    filtered=filtered.filter(r=>{
-      const fs=String(r['FECHA PEDIDO']||'').trim();
-      const iso=fs.match(/^(\d{4})-(\d{2})/);
-      if(iso)return `${iso[1]}-${iso[2]}`===mesFilter;
-      const p=fs.split('/');
-      if(p.length>=3){const y=p[2].length===4?p[2]:'20'+p[2];return `${y}-${p[1].padStart(2,'0')}`===mesFilter;}
-      return false;
-    });
-  }
   if(rubFilter){
     filtered=filtered.filter(r=>String(r['RUBRO']||'').trim()===rubFilter);
   }

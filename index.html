@@ -843,8 +843,10 @@ function processRawRows(rawRows, sourceName) {
       DAYAGG[mes][dayNum]=(DAYAGG[mes][dayNum]||0)+vta;
       // Acumular por ORIGEN para velocímetros
       const _pcode=String(r['PRODUCTO']||'').trim().split(/\s+/)[0].toUpperCase();
-      const _orig=PROD_LOOKUP[_pcode]||'';
-      if(_orig&&FABRICAS_GAUGE.includes(_orig)){
+      const _origRaw=PROD_LOOKUP[_pcode]||'TERCEROS';
+      // PROPIO excluido por ahora (sin gauge); no encontrado → TERCEROS
+      const _orig=(_origRaw==='PROPIO')?null:_origRaw;
+      if(_orig){
         if(!ORIG_AGG[_orig])ORIG_AGG[_orig]={};
         if(!ORIG_AGG[_orig][mes])ORIG_AGG[_orig][mes]={};
         ORIG_AGG[_orig][mes][emp]=(ORIG_AGG[_orig][mes][emp]||0)+vta;
@@ -953,7 +955,7 @@ let PEND_DATA=null;
 let PEND_RAW=null;
 const PROD_LOOKUP={};
 const ORIG_AGG={};
-const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT'];
+const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT','TERCEROS'];
 const GAUGE_FACTORS={BARMAN:1.65,GRAFICA:1.65,TUBOS:1.65,VYMAT:1.65};
 const GAUGE_AVGS_INIT=true;
 

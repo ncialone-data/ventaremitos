@@ -846,7 +846,8 @@ function processRawRows(rawRows, sourceName) {
       const _orig=PROD_LOOKUP[_pcode]||'';
       if(_orig&&FABRICAS_GAUGE.includes(_orig)){
         if(!ORIG_AGG[_orig])ORIG_AGG[_orig]={};
-        ORIG_AGG[_orig][mes]=(ORIG_AGG[_orig][mes]||0)+vta;
+        if(!ORIG_AGG[_orig][mes])ORIG_AGG[_orig][mes]={};
+        ORIG_AGG[_orig][mes][emp]=(ORIG_AGG[_orig][mes][emp]||0)+vta;
       }
     }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
@@ -1059,12 +1060,21 @@ function makeGaugeSVG(pct){
 const GAUGE_AVGS={};
 const GAUGE_SHARES={};
 
+// Devuelve vta de una fábrica en un mes, respetando empGrupoFilter
+function getOrigVta(orig, mes){
+  const byEmp=ORIG_AGG[orig]&&ORIG_AGG[orig][mes];
+  if(!byEmp)return 0;
+  if(!empGrupoFilter)return Object.values(byEmp).reduce((a,b)=>a+b,0);
+  const codes=EMP_GRUPOS[empGrupoFilter]||[];
+  return codes.reduce((s,e)=>s+(byEmp[e]||0),0);
+}
+
 function autoNormalizeFactors(){
   const TARGET=2_500_000_000;
   const prevMeses=MESES.slice(Math.max(0,MESES.length-4),MESES.length-1);
   // Calcular promedio 3m por fábrica
   FABRICAS_GAUGE.forEach(f=>{
-    const pts=prevMeses.map(m=>(ORIG_AGG[f]&&ORIG_AGG[f][m])||0);
+    const pts=prevMeses.map(m=>getOrigVta(f,m));
     GAUGE_AVGS[f]=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
   });
   const totalAvg=FABRICAS_GAUGE.reduce((s,f)=>s+GAUGE_AVGS[f],0);
@@ -1102,10 +1112,10 @@ function renderGauges(){
   document.getElementById('gaugesNote').textContent=`Objetivo total: ${fmtFull(Math.round(totalObj))} · ${MLBL[curMes]||curMes} · vs $2.500M: ${deltaStr}`;
   document.getElementById('gaugesNote').style.color=deltaCol;
   // Gauges
-  const curActualTotal=FABRICAS_GAUGE.reduce((s,f)=>s+((ORIG_AGG[f]&&ORIG_AGG[f][curMes])||0),0);
+  const curActualTotal=FABRICAS_GAUGE.reduce((s,f)=>s+getOrigVta(f,curMes),0);
   const grid=document.getElementById('gaugesGrid');
   grid.innerHTML=FABRICAS_GAUGE.map(f=>{
-    const actual=(ORIG_AGG[f]&&ORIG_AGG[f][curMes])||0;
+    const actual=getOrigVta(f,curMes);
     const avg=GAUGE_AVGS[f]||0;
     const obj=Math.round(avg*(GAUGE_FACTORS[f]||1));
     const pct=obj>0?actual/obj:0;

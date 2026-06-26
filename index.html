@@ -933,6 +933,7 @@ const PROD_LOOKUP={};
 const ORIG_AGG={};
 const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT'];
 const GAUGE_FACTORS={BARMAN:1.65,GRAFICA:1.65,TUBOS:1.65,VYMAT:1.65};
+const GAUGE_AVGS_INIT=true;
 
 function renderPendientes(){
   if(!PEND_DATA)return;
@@ -1034,52 +1035,72 @@ function makeGaugeSVG(pct){
   return `<svg viewBox="0 0 220 120" style="width:100%">${zones}${base}${needle}${cdot}</svg>`;
 }
 
+const GAUGE_AVGS={};
+const GAUGE_SHARES={};
+
 function autoNormalizeFactors(){
   const TARGET=2_500_000_000;
   const prevMeses=MESES.slice(Math.max(0,MESES.length-4),MESES.length-1);
-  const totalAvg=FABRICAS_GAUGE.reduce((s,f)=>{
+  // Calcular promedio 3m por fábrica
+  FABRICAS_GAUGE.forEach(f=>{
     const pts=prevMeses.map(m=>(ORIG_AGG[f]&&ORIG_AGG[f][m])||0);
-    const avg=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
-    return s+avg;
-  },0);
-  if(totalAvg>0){
-    const factor=+(TARGET/totalAvg).toFixed(3);
-    FABRICAS_GAUGE.forEach(f=>GAUGE_FACTORS[f]=factor);
-  }
+    GAUGE_AVGS[f]=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
+  });
+  const totalAvg=FABRICAS_GAUGE.reduce((s,f)=>s+GAUGE_AVGS[f],0);
+  // Share histórico y factor proporcional por fábrica
+  FABRICAS_GAUGE.forEach(f=>{
+    GAUGE_SHARES[f]=totalAvg>0?GAUGE_AVGS[f]/totalAvg:0.25;
+    // Factor = TARGET / totalAvg (mismo para todas cuando distribución es proporcional)
+    // pero se asigna individualmente para que el usuario pueda ajustar por fábrica
+    GAUGE_FACTORS[f]=totalAvg>0?+(TARGET/totalAvg).toFixed(3):1.65;
+  });
 }
 
 function renderGauges(){
   if(!MESES.length)return;
   const curMes=MESES[MESES.length-1];
-  const prevMeses=MESES.slice(Math.max(0,MESES.length-4),MESES.length-1);
-  // Factor inputs
+  const TARGET=2_500_000_000;
+  // Factor inputs con contexto histórico
   const factorRow=document.getElementById('factorRow');
-  factorRow.innerHTML=FABRICAS_GAUGE.map(f=>`
-    <div style="display:flex;align-items:center;gap:6px">
-      <span style="font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em">${f} ×</span>
-      <input type="number" step="0.05" min="0.5" max="10" value="${GAUGE_FACTORS[f]}"
-             class="gauge-input" id="factor_${f}"
-             oninput="GAUGE_FACTORS['${f}']=+this.value||1;renderGauges()">
-    </div>`).join('');
+  factorRow.innerHTML=FABRICAS_GAUGE.map(f=>{
+    const share=GAUGE_SHARES[f]||0;
+    const avg=GAUGE_AVGS[f]||0;
+    const propObj=Math.round(share*TARGET);
+    return `<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-width:130px;flex:1">
+      <div style="font-size:10px;color:var(--mut2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">${f}</div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:2px">Part. histórica: <span style="color:var(--tx);font-weight:600">${(share*100).toFixed(1)}%</span></div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:6px">Prom 3m: <span style="font-family:'IBM Plex Mono',monospace;color:var(--tx)">${fmtM(avg)}</span></div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:4px">Obj proporcional: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(propObj)}</span></div>
+      <div style="display:flex;align-items:center;gap:5px">
+        <span style="font-size:11px;color:var(--mut2)">Factor ×</span>
+        <input type="number" step="0.05" min="0.1" max="20" value="${GAUGE_FACTORS[f]}"
+               class="gauge-input" id="factor_${f}"
+               oninput="GAUGE_FACTORS['${f}']=+this.value||1;renderGauges()">
+        <span style="font-size:11px;color:var(--mut2)">= ${fmtM(Math.round(avg*(GAUGE_FACTORS[f]||1)))}</span>
+      </div>
+    </div>`;
+  }).join('');
   // Calc total objetivo
-  const totalObj=FABRICAS_GAUGE.reduce((s,f)=>{
-    const pts=prevMeses.map(m=>(ORIG_AGG[f]&&ORIG_AGG[f][m])||0);
-    const avg=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
-    return s+avg*(GAUGE_FACTORS[f]||1);
-  },0);
-  document.getElementById('gaugesNote').textContent=`Objetivo total: ${fmtFull(totalObj)} · ${MLBL[curMes]||curMes}`;
+  const totalObj=FABRICAS_GAUGE.reduce((s,f)=>s+(GAUGE_AVGS[f]||0)*(GAUGE_FACTORS[f]||1),0);
+  const delta=totalObj-TARGET;
+  const deltaStr=(delta>=0?'+':'')+fmtM(delta);
+  const deltaCol=Math.abs(delta)<50_000_000?'#4ade80':delta>0?'#facc15':'#f87171';
+  document.getElementById('gaugesNote').textContent=`Objetivo total: ${fmtFull(Math.round(totalObj))} · ${MLBL[curMes]||curMes} · vs $2.500M: ${deltaStr}`;
+  document.getElementById('gaugesNote').style.color=deltaCol;
   // Gauges
+  const curActualTotal=FABRICAS_GAUGE.reduce((s,f)=>s+((ORIG_AGG[f]&&ORIG_AGG[f][curMes])||0),0);
   const grid=document.getElementById('gaugesGrid');
   grid.innerHTML=FABRICAS_GAUGE.map(f=>{
     const actual=(ORIG_AGG[f]&&ORIG_AGG[f][curMes])||0;
-    const pts=prevMeses.map(m=>(ORIG_AGG[f]&&ORIG_AGG[f][m])||0);
-    const avg=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
+    const avg=GAUGE_AVGS[f]||0;
     const obj=Math.round(avg*(GAUGE_FACTORS[f]||1));
     const pct=obj>0?actual/obj:0;
     const pctDisp=(pct*100).toFixed(1);
     const col=pct<0.4?'#f87171':pct<0.7?'#fb923c':pct<0.85?'#facc15':'#4ade80';
+    const share=(GAUGE_SHARES[f]||0);
     return `<div style="text-align:center;padding:6px 4px">
-      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:13px;letter-spacing:.08em;margin-bottom:4px">${f}</div>
+      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:13px;letter-spacing:.08em;margin-bottom:2px">${f}</div>
+      <div style="font-size:10px;color:var(--mut2);margin-bottom:4px">${(share*100).toFixed(1)}% del total histórico</div>
       ${makeGaugeSVG(pct)}
       <div style="font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:${col};margin-top:2px;line-height:1">${pctDisp}%</div>
       <div style="font-size:11px;color:var(--mut);margin-top:4px">${fmtFull(actual)} / ${fmtFull(obj)}</div>

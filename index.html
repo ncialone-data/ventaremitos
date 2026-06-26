@@ -900,6 +900,7 @@ function processRawRows(rawRows, sourceName) {
   const totalRaw=cnt+skipped;
   status.textContent=`✓ ${sourceName} · ${totalRaw.toLocaleString('es-AR')} filas`;
   render();
+  autoNormalizeFactors();
   renderGauges();
 }
 
@@ -1022,7 +1023,7 @@ function makeGaugeSVG(pct){
     const[x1o,y1o]=pt(rO,a1),[x2o,y2o]=pt(rO,a2);
     const[x1i,y1i]=pt(rI,a1),[x2i,y2i]=pt(rI,a2);
     const lg=(a1-a2>180)?1:0;
-    return `<path fill="${fill}" d="M${x1o.toFixed(1)},${y1o.toFixed(1)} A${rO},${rO} 0 ${lg} 0 ${x2o.toFixed(1)},${y2o.toFixed(1)} L${x2i.toFixed(1)},${y2i.toFixed(1)} A${rI},${rI} 0 ${lg} 1 ${x1i.toFixed(1)},${y1i.toFixed(1)} Z"/>`;
+    return `<path fill="${fill}" d="M${x1o.toFixed(1)},${y1o.toFixed(1)} A${rO},${rO} 0 ${lg} 1 ${x2o.toFixed(1)},${y2o.toFixed(1)} L${x2i.toFixed(1)},${y2i.toFixed(1)} A${rI},${rI} 0 ${lg} 0 ${x1i.toFixed(1)},${y1i.toFixed(1)} Z"/>`;
   }
   const zones=seg(180,120,'#f87171')+seg(120,72,'#fb923c')+seg(72,36,'#facc15')+seg(36,0,'#4ade80');
   const nA=180-cap*180;
@@ -1031,6 +1032,20 @@ function makeGaugeSVG(pct){
   const needle=`<line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="var(--tx)" stroke-width="3.5" stroke-linecap="round"/>`;
   const cdot=`<circle cx="${cx}" cy="${cy}" r="7" fill="var(--tx)"/>`;
   return `<svg viewBox="0 0 220 120" style="width:100%">${zones}${base}${needle}${cdot}</svg>`;
+}
+
+function autoNormalizeFactors(){
+  const TARGET=2_500_000_000;
+  const prevMeses=MESES.slice(Math.max(0,MESES.length-4),MESES.length-1);
+  const totalAvg=FABRICAS_GAUGE.reduce((s,f)=>{
+    const pts=prevMeses.map(m=>(ORIG_AGG[f]&&ORIG_AGG[f][m])||0);
+    const avg=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
+    return s+avg;
+  },0);
+  if(totalAvg>0){
+    const factor=+(TARGET/totalAvg).toFixed(3);
+    FABRICAS_GAUGE.forEach(f=>GAUGE_FACTORS[f]=factor);
+  }
 }
 
 function renderGauges(){

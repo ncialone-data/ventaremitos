@@ -55,6 +55,8 @@ body.light .mom-bar-track{background:rgba(0,0,0,.07)}
 body.light .prog-track{background:rgba(0,0,0,.08)}
 .pend-track{height:6px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;margin-top:10px}
 body.light .pend-track{background:rgba(0,0,0,.08)}
+.gauge-input{background:var(--panel2);border:1px solid var(--line2);color:var(--tx);border-radius:6px;padding:4px 7px;font-size:13px;font-family:"IBM Plex Mono",monospace;width:60px;text-align:center}
+.gauge-input:focus{outline:none;border-color:var(--acc)}
 .pend-fill{height:100%;border-radius:3px;transition:width .9s cubic-bezier(.22,1,.36,1)}
 .kpi.pend-alert{border-color:#f87171}
 .theme-toggle{
@@ -286,6 +288,21 @@ svg{display:block;width:100%;overflow:visible}
     <div class="kpi"><div class="k-lbl">—</div></div>
     <div class="kpi"><div class="k-lbl">—</div></div>
     <div class="kpi pend-alert"><div class="k-lbl">—</div></div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:14px" id="gaugesCard">
+  <div class="c-head" style="margin-bottom:6px">
+    <span class="c-title">Cumplimiento por fábrica</span>
+    <span class="c-note" id="gaugesNote">actualizá los datos para cargar</span>
+  </div>
+  <div style="font-size:11px;color:var(--mut2);margin-bottom:10px;letter-spacing:.04em">Factores de objetivo — promedio últimos 3 meses ×</div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px;align-items:center" id="factorRow"></div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px" id="gaugesGrid">
+    <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
+    <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
+    <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
+    <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
   </div>
 </div>
 
@@ -784,6 +801,7 @@ function processRawRows(rawRows, sourceName) {
   let cnt = 0, skipped = 0;
   for(const k in DAYAGG)delete DAYAGG[k];
   REMS_RAW.length=0;
+  for(const k in ORIG_AGG)delete ORIG_AGG[k];
   const _seenComp=new Set();
   for(const r of rawRows) {
     const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;}; // AR siempre
@@ -819,6 +837,13 @@ function processRawRows(rawRows, sourceName) {
     if(['Firmada','Ingresada','Reparto'].includes(estado)){
       if(!DAYAGG[mes])DAYAGG[mes]={};
       DAYAGG[mes][dayNum]=(DAYAGG[mes][dayNum]||0)+vta;
+      // Acumular por ORIGEN para velocímetros
+      const _pcode=String(r['PRODUCTO']||'').trim().split(/\s+/)[0].toUpperCase();
+      const _orig=PROD_LOOKUP[_pcode]||'';
+      if(_orig&&FABRICAS_GAUGE.includes(_orig)){
+        if(!ORIG_AGG[_orig])ORIG_AGG[_orig]={};
+        ORIG_AGG[_orig][mes]=(ORIG_AGG[_orig][mes]||0)+vta;
+      }
     }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
@@ -875,6 +900,7 @@ function processRawRows(rawRows, sourceName) {
   const totalRaw=cnt+skipped;
   status.textContent=`✓ ${sourceName} · ${totalRaw.toLocaleString('es-AR')} filas`;
   render();
+  renderGauges();
 }
 
 function parseCsvText(csv) {
@@ -902,6 +928,10 @@ function parseCsvText(csv) {
 
 let PEND_DATA=null;
 let PEND_RAW=null;
+const PROD_LOOKUP={};
+const ORIG_AGG={};
+const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT'];
+const GAUGE_FACTORS={BARMAN:1.65,GRAFICA:1.65,TUBOS:1.65,VYMAT:1.65};
 
 function renderPendientes(){
   if(!PEND_DATA)return;
@@ -972,6 +1002,74 @@ function calcPendientesFiltered(){
   }
   PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,tot:cntOk+cntAl};
   renderPendientes();
+  renderGauges();
+}
+
+function processProductRows(rows){
+  for(const k in PROD_LOOKUP)delete PROD_LOOKUP[k];
+  for(const r of rows){
+    const cod=String(r['CODIGO']||'').trim();
+    const orig=String(r['ORIGEN']||'').trim();
+    if(cod&&orig)PROD_LOOKUP[cod]=orig;
+  }
+}
+
+function makeGaugeSVG(pct){
+  const cx=110,cy=112,rO=90,rI=60;
+  const cap=Math.min(Math.max(pct,0),1.0);
+  function pt(r,a){const rd=a*Math.PI/180;return[cx+r*Math.cos(rd),cy-r*Math.sin(rd)];}
+  function seg(a1,a2,fill){
+    const[x1o,y1o]=pt(rO,a1),[x2o,y2o]=pt(rO,a2);
+    const[x1i,y1i]=pt(rI,a1),[x2i,y2i]=pt(rI,a2);
+    const lg=(a1-a2>180)?1:0;
+    return `<path fill="${fill}" d="M${x1o.toFixed(1)},${y1o.toFixed(1)} A${rO},${rO} 0 ${lg} 0 ${x2o.toFixed(1)},${y2o.toFixed(1)} L${x2i.toFixed(1)},${y2i.toFixed(1)} A${rI},${rI} 0 ${lg} 1 ${x1i.toFixed(1)},${y1i.toFixed(1)} Z"/>`;
+  }
+  const zones=seg(180,120,'#f87171')+seg(120,72,'#fb923c')+seg(72,36,'#facc15')+seg(36,0,'#4ade80');
+  const nA=180-cap*180;
+  const[nx,ny]=pt(rO,nA);
+  const base=`<line x1="${(cx-rO).toFixed(1)}" y1="${cy}" x2="${(cx+rO).toFixed(1)}" y2="${cy}" stroke="rgba(128,128,128,.25)" stroke-width="1.5"/>`;
+  const needle=`<line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="var(--tx)" stroke-width="3.5" stroke-linecap="round"/>`;
+  const cdot=`<circle cx="${cx}" cy="${cy}" r="7" fill="var(--tx)"/>`;
+  return `<svg viewBox="0 0 220 120" style="width:100%">${zones}${base}${needle}${cdot}</svg>`;
+}
+
+function renderGauges(){
+  if(!MESES.length)return;
+  const curMes=MESES[MESES.length-1];
+  const prevMeses=MESES.slice(Math.max(0,MESES.length-4),MESES.length-1);
+  // Factor inputs
+  const factorRow=document.getElementById('factorRow');
+  factorRow.innerHTML=FABRICAS_GAUGE.map(f=>`
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em">${f} ×</span>
+      <input type="number" step="0.05" min="0.5" max="10" value="${GAUGE_FACTORS[f]}"
+             class="gauge-input" id="factor_${f}"
+             oninput="GAUGE_FACTORS['${f}']=+this.value||1;renderGauges()">
+    </div>`).join('');
+  // Calc total objetivo
+  const totalObj=FABRICAS_GAUGE.reduce((s,f)=>{
+    const pts=prevMeses.map(m=>(ORIG_AGG[f]&&ORIG_AGG[f][m])||0);
+    const avg=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
+    return s+avg*(GAUGE_FACTORS[f]||1);
+  },0);
+  document.getElementById('gaugesNote').textContent=`Objetivo total: ${fmtFull(totalObj)} · ${MLBL[curMes]||curMes}`;
+  // Gauges
+  const grid=document.getElementById('gaugesGrid');
+  grid.innerHTML=FABRICAS_GAUGE.map(f=>{
+    const actual=(ORIG_AGG[f]&&ORIG_AGG[f][curMes])||0;
+    const pts=prevMeses.map(m=>(ORIG_AGG[f]&&ORIG_AGG[f][m])||0);
+    const avg=pts.length?pts.reduce((a,b)=>a+b,0)/pts.length:0;
+    const obj=Math.round(avg*(GAUGE_FACTORS[f]||1));
+    const pct=obj>0?actual/obj:0;
+    const pctDisp=(pct*100).toFixed(1);
+    const col=pct<0.4?'#f87171':pct<0.7?'#fb923c':pct<0.85?'#facc15':'#4ade80';
+    return `<div style="text-align:center;padding:6px 4px">
+      <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:13px;letter-spacing:.08em;margin-bottom:4px">${f}</div>
+      ${makeGaugeSVG(pct)}
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:${col};margin-top:2px;line-height:1">${pctDisp}%</div>
+      <div style="font-size:11px;color:var(--mut);margin-top:4px">${fmtFull(actual)} / ${fmtFull(obj)}</div>
+    </div>`;
+  }).join('');
 }
 
 function processPendientesRows(rawRows){
@@ -987,10 +1085,13 @@ document.getElementById('sheetsBtn').addEventListener('click', async function(){
   status.textContent = '';
   const urlRem = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=0&single=true&output=csv`;
   const urlPend = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1646279255&single=true&output=csv`;
+  const urlProd = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1314968626&single=true&output=csv`;
   try {
-    const [resRem, resPend] = await Promise.all([fetch(urlRem), fetch(urlPend)]);
+    const [resRem, resPend, resProd] = await Promise.all([fetch(urlRem), fetch(urlPend), fetch(urlProd)]);
     if(!resRem.ok) throw new Error(`HTTP ${resRem.status}`);
-    const [textRem, textPend] = await Promise.all([resRem.text(), resPend.text()]);
+    const [textRem, textPend, textProd] = await Promise.all([resRem.text(), resPend.text(), resProd.text()]);
+    // Construir lookup de productos PRIMERO (para enriquecer remitos)
+    if(resProd.ok&&textProd){const rowsProd=parseCsvText(textProd);if(rowsProd.length>0)processProductRows(rowsProd);}
     const rowsRem = parseCsvText(textRem);
     if(rowsRem.length===0) throw new Error('El sheet no devolvió datos');
     processRawRows(rowsRem, 'Google Sheets');

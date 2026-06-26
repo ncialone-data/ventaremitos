@@ -268,9 +268,13 @@ svg{display:block;width:100%;overflow:visible}
     <button data-m="2026-05">May</button>
     <button data-m="2026-06">Jun · parcial</button>
   </div>
-  <button class="clear-btn hide" id="clearEmpBtn">× Quitar empresa</button>
   <button class="xlsx-btn" id="sheetsBtn">↻ Actualizar datos</button>
   <span id="fileStatus" class="file-status"></span>
+  <div style="flex-basis:100%;height:0"></div>
+  <span class="cut-lbl">Empresa</span>
+  <div class="seg" id="empGrupoSeg"></div>
+  <button class="clear-btn hide" id="clearEmpGrupoBtn">× Quitar empresa</button>
+  <button class="clear-btn hide" id="clearEmpBtn">× Quitar empresa individual</button>
   <div style="flex-basis:100%;height:0"></div>
   <span class="cut-lbl">Rubro</span>
   <div class="seg" id="rubSeg"></div>
@@ -426,14 +430,15 @@ const fmtM=n=>{
 };
 const fmtPct=n=>n.toFixed(1)+'%';
 
-let mesFilter=null, empFilter=null, rubFilter=null;
+const EMP_GRUPOS={'LUSTRAMAX':['LST','LST2'],'VYMAT':['VMT','VMT2'],'CIA. DE HIGIENE':['CDH']};
+let mesFilter=null, empFilter=null, rubFilter=null, empGrupoFilter=null;
 const A=()=>document.body.classList.contains('light')?'#2563eb':'#b8ff36';
 const Argb=()=>document.body.classList.contains('light')?'37,99,235':'184,255,54';
 const DAYAGG={};
 const REMS_RAW=[];  // comprobantes únicos: {comp,estado,mes,emp}
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
-function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
-function rowsNoMes(){let r=DATA;if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
+function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
+function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 
 const tip=document.getElementById('tip');
 const showTip=(e,html)=>{tip.innerHTML=html;tip.style.opacity='1';moveTip(e);};
@@ -454,8 +459,8 @@ function render(){
       &&(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
     .map(d=>d.rawcli)
   ).size;
-  document.getElementById('scope').textContent=empFilter||"Todas";
-  document.getElementById('scope').style.color=empFilter?COLOR[empFilter]:"var(--teal)";
+  document.getElementById('scope').textContent=empGrupoFilter||empFilter||"Todas";
+  document.getElementById('scope').style.color=(empGrupoFilter||empFilter)?'var(--teal)':"var(--teal)";
   document.getElementById('clearEmpBtn').classList.toggle('hide',!empFilter);
   document.getElementById('clearRubBtn').classList.toggle('hide',!rubFilter);
   document.getElementById('rankHint').style.display=empFilter?'none':'inline';
@@ -684,11 +689,11 @@ function renderEstados(R,total){
   R.forEach(d=>map[d.e]=(map[d.e]||0)+d.v);
   // Conteo por comprobantes únicos (no por filas agregadas)
   const cnt={};
-  REMS_RAW.filter(d=>(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
+  REMS_RAW.filter(d=>(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter)&&(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp)))
     .forEach(d=>cnt[d.estado]=(cnt[d.estado]||0)+1);
   const ORDER=['Firmada','Ingresada','Reparto','Transito','Anulada'];
   const arr=Object.entries(map).sort((a,b)=>ORDER.indexOf(a[0])-ORDER.indexOf(b[0]));
-  document.getElementById('estadoNote').textContent=(mesFilter?MLBL[mesFilter]:'año completo')+(empFilter?' · '+empFilter:'')+(rubFilter?' · '+rubFilter:'');
+  document.getElementById('estadoNote').textContent=(mesFilter?MLBL[mesFilter]:'año completo')+(empGrupoFilter?' · '+empGrupoFilter:'')+(empFilter?' · '+empFilter:'')+(rubFilter?' · '+rubFilter:'');
   document.getElementById('estados').innerHTML=arr.map(([estado,monto])=>{
     const col=ESTADO_COL[estado.trim()]||'#9d7bff';
     const pct=(total?monto/total*100:0).toFixed(1);
@@ -880,7 +885,7 @@ function processRawRows(rawRows, sourceName) {
   seg.querySelectorAll('button').forEach(b=>{
     b.onclick=()=>{mesFilter=b.dataset.m||null;seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));render();};
   });
-  mesFilter=ms[ms.length-1]; empFilter=null; rubFilter=null;
+  mesFilter=ms[ms.length-1]; empFilter=null; rubFilter=null; empGrupoFilter=null;
   // Construir filtro de rubros dinámico (excluye "-")
   const rubros=[...new Set(DATA.map(d=>d.r))].filter(r=>r&&r!=='-').sort();
   const rubSeg=document.getElementById('rubSeg');
@@ -893,6 +898,23 @@ function processRawRows(rawRows, sourceName) {
       render();
     };
   });
+  // Filtro de empresas agrupadas
+  const empGrupoSeg=document.getElementById('empGrupoSeg');
+  empGrupoSeg.innerHTML=Object.keys(EMP_GRUPOS).map(g=>`<button data-g="${g}">${g}</button>`).join('');
+  empGrupoSeg.querySelectorAll('button').forEach(b=>{
+    b.onclick=()=>{
+      empGrupoFilter=(empGrupoFilter===b.dataset.g)?null:b.dataset.g;
+      empGrupoSeg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.g===empGrupoFilter));
+      document.getElementById('clearEmpGrupoBtn').classList.toggle('hide',!empGrupoFilter);
+      render();
+    };
+  });
+  document.getElementById('clearEmpGrupoBtn').onclick=()=>{
+    empGrupoFilter=null;
+    empGrupoSeg.querySelectorAll('button').forEach(b=>b.classList.remove('on'));
+    document.getElementById('clearEmpGrupoBtn').classList.add('hide');
+    render();
+  };
   const tot=DATA.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.e)).reduce((s,d)=>s+d.v,0);
   document.getElementById('periodo').textContent=
     `${DATA.length.toLocaleString('es-AR')} registros · ${MLBL[ms[0]]}–${MLBL[ms[ms.length-1]]} · ${fmtM(tot)} activos (Firm+Ing+Rep)`;

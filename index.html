@@ -300,13 +300,14 @@ svg{display:block;width:100%;overflow:visible}
     <span class="c-title">Cumplimiento por fábrica</span>
     <span class="c-note" id="gaugesNote">actualizá los datos para cargar</span>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px" id="gaugesGrid">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px" id="gaugesGrid">
+    <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
     <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
     <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
     <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
     <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px" id="infoRow"></div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px" id="infoRow"></div>
 </div>
 
 <div class="card" style="margin-bottom:14px">
@@ -1099,11 +1100,14 @@ function renderGauges(){
     const share=GAUGE_SHARES[f]||0;
     const avg=GAUGE_AVGS[f]||0;
     const propObj=Math.round(share*TARGET);
+    const pctVsAvg=avg>0?((propObj-avg)/avg*100):0;
+    const pctSign=pctVsAvg>=0?'+':'';  
+    const pctCol2=pctVsAvg>=0?'var(--teal)':'#f87171';
     return `<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
       <div style="font-size:10px;color:var(--mut2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;font-weight:600">${f}</div>
-      <div style="font-size:11px;color:var(--mut);margin-bottom:3px">Part. histórica: <span style="color:var(--tx);font-weight:600">${(share*100).toFixed(1)}%</span></div>
       <div style="font-size:11px;color:var(--mut);margin-bottom:3px">Prom 3m: <span style="font-family:'IBM Plex Mono',monospace;color:var(--tx)">${fmtM(avg)}</span></div>
-      <div style="font-size:11px;color:var(--mut);margin-bottom:3px">Obj proporcional: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(propObj)}</span></div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Objetivo: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(propObj)}</span></div>
+      <div style="font-size:11px;color:${pctCol2};margin-bottom:3px;padding-left:2px">${pctSign}${pctVsAvg.toFixed(1)}% vs prom 3m</div>
     </div>`;
   }).join('');
   // Calc total objetivo
@@ -1111,8 +1115,7 @@ function renderGauges(){
   const delta=totalObj-TARGET;
   const deltaStr=(delta>=0?'+':'')+fmtM(delta);
   const deltaCol=Math.abs(delta)<50_000_000?'#4ade80':delta>0?'#facc15':'#f87171';
-  document.getElementById('gaugesNote').textContent=`Objetivo total: ${fmtFull(Math.round(totalObj))} · ${MLBL[curMes]||curMes} · vs $2.500M: ${deltaStr}`;
-  document.getElementById('gaugesNote').style.color=deltaCol;
+  document.getElementById('gaugesNote').textContent='';
   // Gauges
   const curActualTotal=FABRICAS_GAUGE.reduce((s,f)=>s+getOrigVta(f,curMes),0);
   const grid=document.getElementById('gaugesGrid');
@@ -1123,10 +1126,8 @@ function renderGauges(){
     const pct=obj>0?actual/obj:0;
     const pctDisp=(pct*100).toFixed(1);
     const col=pct<0.4?'#f87171':pct<0.7?'#fb923c':pct<0.85?'#facc15':'#4ade80';
-    const share=(GAUGE_SHARES[f]||0);
     return `<div style="text-align:center;padding:6px 4px">
       <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:13px;letter-spacing:.08em;margin-bottom:2px">${f}</div>
-      <div style="font-size:10px;color:var(--mut2);margin-bottom:4px">${(share*100).toFixed(1)}% del total histórico</div>
       ${makeGaugeSVG(pct)}
       <div style="font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:${col};margin-top:2px;line-height:1">${pctDisp}%</div>
       <div style="font-size:11px;color:var(--mut);margin-top:4px">${fmtFull(actual)} / ${fmtFull(obj)}</div>

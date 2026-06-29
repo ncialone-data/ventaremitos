@@ -1081,13 +1081,11 @@ function makeGaugeSVG(pct){
 const GAUGE_AVGS={};
 const GAUGE_SHARES={};
 
-// Devuelve vta de una fábrica en un mes, respetando empGrupoFilter
+// Devuelve vta de una fábrica en un mes — siempre total, sin filtros de empresa/rubro
 function getOrigVta(orig, mes){
   const byEmp=ORIG_AGG[orig]&&ORIG_AGG[orig][mes];
   if(!byEmp)return 0;
-  if(!empGrupoFilter)return Object.values(byEmp).reduce((a,b)=>a+b,0);
-  const codes=EMP_GRUPOS[empGrupoFilter]||[];
-  return codes.reduce((s,e)=>s+(byEmp[e]||0),0);
+  return Object.values(byEmp).reduce((a,b)=>a+b,0);
 }
 
 function autoNormalizeFactors(){

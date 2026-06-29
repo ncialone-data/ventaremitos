@@ -110,8 +110,8 @@ header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-be
 .xlsx-btn:hover{background:var(--acc-d)}
 .xlsx-btn.loading{opacity:.6;pointer-events:none}
 .file-status{font-size:12px;color:var(--mut)}
-.kpis{display:grid;grid-template-columns:1.8fr 1fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px}
-.kpi .k-val.full{font-size:clamp(20px,2.8vw,38px);line-height:1.05}
+.kpis{display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:16px}
+.kpi .k-val.full{font-size:clamp(16px,2.0vw,28px);line-height:1.05}
 .kpi-prog{margin-top:10px}
 .kpi-prog .prog-track{height:5px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;margin-top:4px}
 .kpi-prog .prog-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--acc),var(--acc-d));transition:width 1s cubic-bezier(.22,1,.36,1)}
@@ -202,7 +202,7 @@ svg{display:block;width:100%;overflow:visible}
 @media(max-width:960px){
   .tipos{grid-template-columns:repeat(3,1fr)!important}
 }
-@media(max-width:1050px){
+@media(max-width:1200px){
   .kpis{grid-template-columns:repeat(3,1fr)}
 }
 @media(max-width:860px){
@@ -217,7 +217,7 @@ svg{display:block;width:100%;overflow:visible}
   .scope{text-align:left}
   .brand h1{font-size:clamp(26px,8vw,38px)}
   .kpis{grid-template-columns:1fr 1fr}
-  .kpis>.kpi:last-child:nth-child(odd){grid-column:1/-1}
+  .kpis>.kpi:last-child:nth-child(odd){grid-column:auto}
   .kpi{padding:14px 14px}
   .kpi .k-val{font-size:clamp(18px,5vw,26px)}
   .tipos{grid-template-columns:1fr!important}
@@ -460,6 +460,21 @@ function render(){
       &&(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
     .map(d=>d.rawcli)
   ).size;
+  // Clientes nuevos: activos en el mes filtrado sin historial en meses anteriores
+  let clientesNuevos = null;
+  if(mesFilter){
+    const cliActual=new Set(
+      REMS_RAW.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.estado)
+        &&d.mes===mesFilter&&(!empFilter||d.emp===empFilter))
+      .map(d=>d.rawcli)
+    );
+    const cliAnteriores=new Set(
+      REMS_RAW.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.estado)
+        &&d.mes<mesFilter&&(!empFilter||d.emp===empFilter))
+      .map(d=>d.rawcli)
+    );
+    clientesNuevos=[...cliActual].filter(c=>!cliAnteriores.has(c)).length;
+  }
   document.getElementById('scope').textContent=empGrupoFilter||empFilter||"Todas";
   document.getElementById('scope').style.color=(empGrupoFilter||empFilter)?'var(--teal)':"var(--teal)";
   document.getElementById('clearEmpBtn').classList.toggle('hide',!empFilter);
@@ -527,7 +542,10 @@ function render(){
       <div class="k-sub">$${fmtM(totalVta-totalCos)} neto</div></div>
     <div class="kpi"><div class="k-lbl">Clientes únicos</div>
       <div class="k-val">${clientes.toLocaleString('es-AR')}</div>
-      <div class="k-sub">en remitos activos</div></div>`;
+      <div class="k-sub">en remitos activos</div></div>
+    <div class="kpi"><div class="k-lbl">Clientes nuevos</div>
+      <div class="k-val" style="color:var(--teal)">${clientesNuevos!==null?clientesNuevos.toLocaleString('es-AR'):'—'}</div>
+      <div class="k-sub">${clientesNuevos!==null?'sin historial previo':'seleccioná un mes'}</div></div>`;
   renderRanking(Rfirm);
   renderMonth(rowsNoMes().filter(d=>ACTIVOS.includes(d.e)));
   renderClientes(Rfirm,totalVta);

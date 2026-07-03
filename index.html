@@ -415,7 +415,7 @@ svg{display:block;width:100%;overflow:visible}
     <span class="c-note" id="cliNote">actualizá los datos para cargar</span>
   </div>
   <div style="overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;table-layout:fixed" id="cliTable">
+    <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px" id="cliTable">
       <colgroup>
         <col style="width:38%">
         <col style="width:15%">
@@ -863,6 +863,7 @@ function processRawRows(rawRows, sourceName) {
   let cnt = 0, skipped = 0;
   for(const k in DAYAGG)delete DAYAGG[k];
   REMS_RAW.length=0;
+  for(const k in CLI_AGG)delete CLI_AGG[k];
   for(const k in ORIG_AGG)delete ORIG_AGG[k];
   const _seenComp=new Set();
   for(const r of rawRows) {
@@ -919,14 +920,15 @@ function processRawRows(rawRows, sourceName) {
       if(!dayProd[_dkey][_pkey])dayProd[_dkey][_pkey]={prod:_prodFull,rawcli:_rawcli,ejec:_ejec,vta:0,cos:0};
       dayProd[_dkey][_pkey].vta+=vta;
       dayProd[_dkey][_pkey].cos+=cos;
-      // Acumular en CLI_AGG (todos los datos, acumulado total)
+      // Acumular en CLI_AGG por mes → cliente → producto
       const _cliKey=_rawcli||'(sin cliente)';
-      if(!CLI_AGG[_cliKey])CLI_AGG[_cliKey]={name:_cliKey,vta:0,cos:0,prods:{}};
-      CLI_AGG[_cliKey].vta+=vta;
-      CLI_AGG[_cliKey].cos+=cos;
-      if(!CLI_AGG[_cliKey].prods[_prodFull])CLI_AGG[_cliKey].prods[_prodFull]={vta:0,cos:0};
-      CLI_AGG[_cliKey].prods[_prodFull].vta+=vta;
-      CLI_AGG[_cliKey].prods[_prodFull].cos+=cos;
+      if(!CLI_AGG[mes])CLI_AGG[mes]={};
+      if(!CLI_AGG[mes][_cliKey])CLI_AGG[mes][_cliKey]={name:_cliKey,vta:0,cos:0,prods:{}};
+      CLI_AGG[mes][_cliKey].vta+=vta;
+      CLI_AGG[mes][_cliKey].cos+=cos;
+      if(!CLI_AGG[mes][_cliKey].prods[_prodFull])CLI_AGG[mes][_cliKey].prods[_prodFull]={vta:0,cos:0};
+      CLI_AGG[mes][_cliKey].prods[_prodFull].vta+=vta;
+      CLI_AGG[mes][_cliKey].prods[_prodFull].cos+=cos;
     }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
@@ -1368,22 +1370,22 @@ function renderUtilidadClientes(){
   const tbody=document.getElementById('cliBody');
   const note=document.getElementById('cliNote');
   if(!tbody)return;
-  const rows=Object.values(CLI_AGG).filter(c=>c.name&&c.vta!==0);
-  if(!rows.length){if(note)note.textContent='sin datos';tbody.innerHTML='';return;}
+  // Mes activo: mesFilter o el último mes disponible
+  const mesKey=mesFilter||(MESES&&MESES[MESES.length-1])||null;
+  const mesData=mesKey?CLI_AGG[mesKey]:{};
+  if(!mesData||!Object.keys(mesData).length){if(note)note.textContent='sin datos';tbody.innerHTML='';return;}
   const _fmt=n=>Math.round(n).toLocaleString('es-AR');
   const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#facc15':'#4ade80';
+  const dot=(pct,sz)=>`<span style="display:inline-block;width:${sz}px;height:${sz}px;border-radius:50%;background:${dotC(pct)};margin-right:4px;vertical-align:middle"></span>`;
+  const rows=Object.values(mesData).filter(c=>c.name&&c.vta!==0);
   rows.forEach(c=>{c.util=c.vta-c.cos;c.pct=c.vta?(c.vta-c.cos)/c.vta*100:0;});
-  rows.sort((a,b)=>a.pct-b.pct);
-  const totVta=rows.reduce((s,r)=>s+r.vta,0);
-  const totCos=rows.reduce((s,r)=>s+r.cos,0);
-  const totUtil=totVta-totCos;
-  const totPct=totVta?totUtil/totVta*100:0;
-  if(note)note.textContent=`${rows.length} clientes · acumulado`;
+  // Solo clientes con <50% utilidad
+  const filtered=rows.filter(c=>c.pct<50).sort((a,b)=>a.pct-b.pct);
+  const mesLabel=mesKey?(MLBL&&MLBL[mesKey]?MLBL[mesKey]:mesKey):'';
+  if(note)note.textContent=`${filtered.length} clientes con <50% util · ${mesLabel}`;
   tbody.innerHTML='';
-  rows.forEach((c,i)=>{
-    const pct=c.pct;
-    const dc=dotC(pct);
-    const dot=`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dc};margin-right:4px;vertical-align:middle"></span>`;
+  filtered.forEach((c)=>{
+    const pct=c.pct;const dc=dotC(pct);
     const tr=document.createElement('tr');
     tr.style.cssText='cursor:pointer;border-bottom:1px solid var(--line)';
     tr.innerHTML=`
@@ -1393,8 +1395,7 @@ function renderUtilidadClientes(){
       <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(c.vta)}</td>
       <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(c.cos)}</td>
       <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${dc};font-weight:${pct<0?700:400}">${c.util<0?'-':''}$${_fmt(Math.abs(c.util))}</td>
-      <td style="padding:5px 8px;text-align:right;white-space:nowrap">${dot}<span style="color:${dc};font-weight:700">${pct.toFixed(1)}%</span></td>`;
-    // Filas de productos (ocultas por defecto)
+      <td style="padding:5px 8px;text-align:right;white-space:nowrap">${dot(pct,9)}<span style="color:${dc};font-weight:700;font-size:11px">${pct.toFixed(1)}%</span></td>`;
     const prods=Object.entries(c.prods).map(([pn,pd])=>{
       const pu=pd.vta-pd.cos;const pp=pd.vta?pu/pd.vta*100:0;
       return {name:pn,vta:pd.vta,cos:pd.cos,util:pu,pct:pp};
@@ -1403,13 +1404,12 @@ function renderUtilidadClientes(){
       const st=document.createElement('tr');
       st.style.cssText='display:none;background:rgba(128,128,128,0.04);border-bottom:1px solid var(--line)';
       const pc=dotC(p.pct);
-      const pd=`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${pc};margin-right:4px;vertical-align:middle"></span>`;
       st.innerHTML=`
         <td style="padding:4px 8px 4px 24px;font-size:11px;color:var(--text-muted,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</td>
         <td style="padding:4px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:var(--text-muted,#888)">$${_fmt(p.vta)}</td>
         <td style="padding:4px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:var(--text-muted,#888)">$${_fmt(p.cos)}</td>
         <td style="padding:4px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${pc}">${p.util<0?'-':''}$${_fmt(Math.abs(p.util))}</td>
-        <td style="padding:4px 8px;text-align:right;white-space:nowrap">${pd}<span style="color:${pc}">${p.pct.toFixed(1)}%</span></td>`;
+        <td style="padding:4px 8px;text-align:right;white-space:nowrap">${dot(p.pct,7)}<span style="color:${pc};font-size:11px">${p.pct.toFixed(1)}%</span></td>`;
       return st;
     });
     tr.addEventListener('click',()=>{
@@ -1421,20 +1421,22 @@ function renderUtilidadClientes(){
     tbody.appendChild(tr);
     subRows.forEach(s=>tbody.appendChild(s));
   });
-  // Fila de totales
+  // Fila total (sobre los filtrados)
+  const totVta=filtered.reduce((s,r)=>s+r.vta,0);
+  const totCos=filtered.reduce((s,r)=>s+r.cos,0);
+  const totUtil=totVta-totCos;
+  const totPct=totVta?totUtil/totVta*100:0;
+  const tdc=dotC(totPct);
   const totRow=document.createElement('tr');
   totRow.style.cssText='font-weight:600;border-top:2px solid var(--line2)';
-  const tdc=dotC(totPct);
-  const tdot=`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${tdc};margin-right:4px;vertical-align:middle"></span>`;
   totRow.innerHTML=`
-    <td style="padding:6px 8px;font-size:12px">Total general</td>
-    <td style="padding:6px 8px;font-size:12px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(totVta)}</td>
-    <td style="padding:6px 8px;font-size:12px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(totCos)}</td>
-    <td style="padding:6px 8px;font-size:12px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${tdc}">${totUtil<0?'-':''}$${_fmt(Math.abs(totUtil))}</td>
-    <td style="padding:6px 8px;text-align:right;white-space:nowrap">${tdot}<span style="color:${tdc};font-weight:700">${totPct.toFixed(1)}%</span></td>`;
+    <td style="padding:6px 8px;font-size:11.5px">Total (filtrado)</td>
+    <td style="padding:6px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(totVta)}</td>
+    <td style="padding:6px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(totCos)}</td>
+    <td style="padding:6px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${tdc}">${totUtil<0?'-':''}$${_fmt(Math.abs(totUtil))}</td>
+    <td style="padding:6px 8px;text-align:right;white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${tdc};margin-right:4px;vertical-align:middle"></span><span style="color:${tdc};font-weight:700;font-size:11px">${totPct.toFixed(1)}%</span></td>`;
   tbody.appendChild(totRow);
 }
-
 </script>
 </body>
 </html>

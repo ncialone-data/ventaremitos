@@ -401,9 +401,9 @@ svg{display:block;width:100%;overflow:visible}
   </div>
 </div>
 
-<div class="card" style="margin-bottom:14px" id="ayerCard">
+<div class="card" style="margin-top:14px;margin-bottom:14px" id="ayerCard">
   <div class="c-hd">
-    <span class="c-title">Utilidad · Último día con datos</span>
+    <span class="c-title">Utilidad negativa ayer</span>
     <span class="c-note" id="ayerNote">actualizá los datos para cargar</span>
   </div>
   <div id="ayerTable"></div>
@@ -1290,7 +1290,7 @@ function renderUtilidadNegativa(){
   if(!AYER_DATA.length){note.textContent='sin datos';el.innerHTML='';return;}
   // Filtrar solo filas con utilidad < 50%
   const rows=AYER_DATA.filter(r=>r.pct<50);
-  note.textContent=`${rows.length} líneas con <50% util · ${window._AYER_LABEL||'último día'}`;
+  note.textContent=window._AYER_LABEL||'último día';
   const fmtV=v=>Math.round(v).toLocaleString('es-AR');
   // Nueva escala de colores: rojo <40% | amarillo 40-50% | verde ≥50%
   const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#facc15':'#4ade80';

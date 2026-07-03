@@ -1288,13 +1288,20 @@ function renderUtilidadNegativa(){
   const note=document.getElementById('ayerNote');
   if(!el)return;
   if(!AYER_DATA.length){note.textContent='sin datos';el.innerHTML='';return;}
-  note.textContent=`${AYER_DATA.length} líneas · ${window._AYER_LABEL||'último día'}`;
+  // Filtrar solo filas con utilidad < 50%
+  const rows=AYER_DATA.filter(r=>r.pct<50);
+  note.textContent=`${rows.length} líneas con <50% util · ${window._AYER_LABEL||'último día'}`;
   const fmtV=v=>Math.round(v).toLocaleString('es-AR');
-  const dotC=pct=>pct<0?'#f87171':pct<20?'#fb923c':pct<35?'#facc15':'#4ade80';
+  // Nueva escala de colores: rojo <40% | amarillo 40-50% | verde ≥50%
+  const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#facc15':'#4ade80';
   const dot=pct=>`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dotC(pct)};margin-right:4px;vertical-align:middle;flex-shrink:0"></span>`;
-  el.innerHTML=`<div style="overflow-x:auto"><table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse">
+  el.innerHTML=`<table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse;table-layout:fixed">
+    <colgroup>
+      <col style="width:30%"><col style="width:24%"><col style="width:12%">
+      <col style="width:11%"><col style="width:11%"><col style="width:7%"><col style="width:5%">
+    </colgroup>
     <thead><tr>
-      <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line2);white-space:nowrap">Código / Producto</th>
+      <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line2)">Código / Producto</th>
       <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line2)">Cliente</th>
       <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line2)">Ejecutivo</th>
       <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line2)">Venta</th>
@@ -1302,20 +1309,21 @@ function renderUtilidadNegativa(){
       <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line2)">Util $</th>
       <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line2)">Util %</th>
     </tr></thead>
-    <tbody>${AYER_DATA.map(r=>{
+    <tbody>${rows.map(r=>{
       const uc=dotC(r.pct);
       const utilStr=(r.util<0?'-':'')+'$'+fmtV(Math.abs(r.util));
+      const ejec=(()=>{const _c=String(r.rawcli||'').trim().split(' ')[0];return CLIENT_LOOKUP[_c]||r.ejec||'—';})();
       return `<tr style="border-bottom:1px solid var(--line)">
-        <td style="padding:5px 8px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px">${r.prod||'—'}</td>
-        <td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px">${r.rawcli||'—'}</td>
-        <td style="padding:5px 8px;white-space:nowrap;font-size:11.5px">${(()=>{const _c=String(r.rawcli||'').trim().split(' ')[0];return CLIENT_LOOKUP[_c]||r.ejec||'—';})()}</td>
-        <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(r.vta)}</td>
-        <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(r.cos)}</td>
-        <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${uc};font-weight:${r.pct<0?700:400}">${utilStr}</td>
+        <td style="padding:5px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px">${r.prod||'—'}</td>
+        <td style="padding:5px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px">${r.rawcli||'—'}</td>
+        <td style="padding:5px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px">${ejec}</td>
+        <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">$${fmtV(r.vta)}</td>
+        <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">$${fmtV(r.cos)}</td>
+        <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${uc};font-weight:${r.pct<0?700:400}">${utilStr}</td>
         <td style="padding:5px 8px;text-align:right;white-space:nowrap">${dot(r.pct)}<span style="color:${uc};font-weight:700">${r.pct.toFixed(1)}%</span></td>
       </tr>`;
     }).join('')}</tbody>
-  </table></div>`;
+  </table>`;
 }
 
 </script>

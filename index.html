@@ -408,6 +408,34 @@ svg{display:block;width:100%;overflow:visible}
   </div>
   <div id="ayerTable"></div>
 </div>
+
+<div class="card" style="margin-top:14px;margin-bottom:14px" id="cliCard">
+  <div class="c-hd">
+    <span class="c-title">Utilidad clientes</span>
+    <span class="c-note" id="cliNote">actualizá los datos para cargar</span>
+  </div>
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;table-layout:fixed" id="cliTable">
+      <colgroup>
+        <col style="width:38%">
+        <col style="width:15%">
+        <col style="width:15%">
+        <col style="width:15%">
+        <col style="width:17%">
+      </colgroup>
+      <thead>
+        <tr style="border-bottom:1px solid var(--line2)">
+          <th style="padding:6px 8px;font-size:11px;text-align:left;font-weight:600">CLIENTE</th>
+          <th style="padding:6px 8px;font-size:11px;text-align:right;font-weight:600">VENTA</th>
+          <th style="padding:6px 8px;font-size:11px;text-align:right;font-weight:600">COSTO</th>
+          <th style="padding:6px 8px;font-size:11px;text-align:right;font-weight:600">UTIL</th>
+          <th style="padding:6px 8px;font-size:11px;text-align:right;font-weight:600">UTIL %</th>
+        </tr>
+      </thead>
+      <tbody id="cliBody"></tbody>
+    </table>
+  </div>
+</div>
 </div>
 <div id="tip"></div>
 <script>
@@ -445,6 +473,7 @@ const Argb=()=>document.body.classList.contains('light')?'37,99,235':'184,255,54
 const DAYAGG={};
 const REMS_RAW=[];  // comprobantes únicos: {comp,estado,mes,emp}
 const AYER_DATA=[];  // filas del último día con datos {prod,rawcli,ejec,vta,cos,util,pct}
+const CLI_AGG={};  // acumulado por cliente: {name,vta,cos,prods:{prodName:{vta,cos}}}
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
@@ -564,6 +593,7 @@ function render(){
   renderMatrix();
   if(PEND_RAW)calcPendientesFiltered();
   renderUtilidadNegativa();
+  renderUtilidadClientes();
 }
 
 function renderRanking(R){
@@ -889,6 +919,14 @@ function processRawRows(rawRows, sourceName) {
       if(!dayProd[_dkey][_pkey])dayProd[_dkey][_pkey]={prod:_prodFull,rawcli:_rawcli,ejec:_ejec,vta:0,cos:0};
       dayProd[_dkey][_pkey].vta+=vta;
       dayProd[_dkey][_pkey].cos+=cos;
+      // Acumular en CLI_AGG (todos los datos, acumulado total)
+      const _cliKey=_rawcli||'(sin cliente)';
+      if(!CLI_AGG[_cliKey])CLI_AGG[_cliKey]={name:_cliKey,vta:0,cos:0,prods:{}};
+      CLI_AGG[_cliKey].vta+=vta;
+      CLI_AGG[_cliKey].cos+=cos;
+      if(!CLI_AGG[_cliKey].prods[_prodFull])CLI_AGG[_cliKey].prods[_prodFull]={vta:0,cos:0};
+      CLI_AGG[_cliKey].prods[_prodFull].vta+=vta;
+      CLI_AGG[_cliKey].prods[_prodFull].cos+=cos;
     }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
@@ -1324,6 +1362,77 @@ function renderUtilidadNegativa(){
       </tr>`;
     }).join('')}</tbody>
   </table>`;
+}
+
+function renderUtilidadClientes(){
+  const tbody=document.getElementById('cliBody');
+  const note=document.getElementById('cliNote');
+  if(!tbody)return;
+  const rows=Object.values(CLI_AGG).filter(c=>c.name&&c.vta!==0);
+  if(!rows.length){if(note)note.textContent='sin datos';tbody.innerHTML='';return;}
+  const _fmt=n=>Math.round(n).toLocaleString('es-AR');
+  const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#facc15':'#4ade80';
+  rows.forEach(c=>{c.util=c.vta-c.cos;c.pct=c.vta?(c.vta-c.cos)/c.vta*100:0;});
+  rows.sort((a,b)=>a.pct-b.pct);
+  const totVta=rows.reduce((s,r)=>s+r.vta,0);
+  const totCos=rows.reduce((s,r)=>s+r.cos,0);
+  const totUtil=totVta-totCos;
+  const totPct=totVta?totUtil/totVta*100:0;
+  if(note)note.textContent=`${rows.length} clientes · acumulado`;
+  tbody.innerHTML='';
+  rows.forEach((c,i)=>{
+    const pct=c.pct;
+    const dc=dotC(pct);
+    const dot=`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dc};margin-right:4px;vertical-align:middle"></span>`;
+    const tr=document.createElement('tr');
+    tr.style.cssText='cursor:pointer;border-bottom:1px solid var(--line)';
+    tr.innerHTML=`
+      <td style="padding:5px 8px;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        <span class="cli-tog" style="margin-right:5px;color:var(--text-muted,#888);font-size:10px;user-select:none">▶</span>${c.name}
+      </td>
+      <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(c.vta)}</td>
+      <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(c.cos)}</td>
+      <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${dc};font-weight:${pct<0?700:400}">${c.util<0?'-':''}$${_fmt(Math.abs(c.util))}</td>
+      <td style="padding:5px 8px;text-align:right;white-space:nowrap">${dot}<span style="color:${dc};font-weight:700">${pct.toFixed(1)}%</span></td>`;
+    // Filas de productos (ocultas por defecto)
+    const prods=Object.entries(c.prods).map(([pn,pd])=>{
+      const pu=pd.vta-pd.cos;const pp=pd.vta?pu/pd.vta*100:0;
+      return {name:pn,vta:pd.vta,cos:pd.cos,util:pu,pct:pp};
+    }).sort((a,b)=>a.pct-b.pct);
+    const subRows=prods.map(p=>{
+      const st=document.createElement('tr');
+      st.style.cssText='display:none;background:rgba(128,128,128,0.04);border-bottom:1px solid var(--line)';
+      const pc=dotC(p.pct);
+      const pd=`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${pc};margin-right:4px;vertical-align:middle"></span>`;
+      st.innerHTML=`
+        <td style="padding:4px 8px 4px 24px;font-size:11px;color:var(--text-muted,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</td>
+        <td style="padding:4px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:var(--text-muted,#888)">$${_fmt(p.vta)}</td>
+        <td style="padding:4px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:var(--text-muted,#888)">$${_fmt(p.cos)}</td>
+        <td style="padding:4px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${pc}">${p.util<0?'-':''}$${_fmt(Math.abs(p.util))}</td>
+        <td style="padding:4px 8px;text-align:right;white-space:nowrap">${pd}<span style="color:${pc}">${p.pct.toFixed(1)}%</span></td>`;
+      return st;
+    });
+    tr.addEventListener('click',()=>{
+      const tog=tr.querySelector('.cli-tog');
+      const open=subRows.length&&subRows[0].style.display!=='none';
+      subRows.forEach(s=>s.style.display=open?'none':'table-row');
+      if(tog)tog.textContent=open?'▶':'▼';
+    });
+    tbody.appendChild(tr);
+    subRows.forEach(s=>tbody.appendChild(s));
+  });
+  // Fila de totales
+  const totRow=document.createElement('tr');
+  totRow.style.cssText='font-weight:600;border-top:2px solid var(--line2)';
+  const tdc=dotC(totPct);
+  const tdot=`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${tdc};margin-right:4px;vertical-align:middle"></span>`;
+  totRow.innerHTML=`
+    <td style="padding:6px 8px;font-size:12px">Total general</td>
+    <td style="padding:6px 8px;font-size:12px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(totVta)}</td>
+    <td style="padding:6px 8px;font-size:12px;text-align:right;font-family:'IBM Plex Mono',monospace">$${_fmt(totCos)}</td>
+    <td style="padding:6px 8px;font-size:12px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${tdc}">${totUtil<0?'-':''}$${_fmt(Math.abs(totUtil))}</td>
+    <td style="padding:6px 8px;text-align:right;white-space:nowrap">${tdot}<span style="color:${tdc};font-weight:700">${totPct.toFixed(1)}%</span></td>`;
+  tbody.appendChild(totRow);
 }
 
 </script>

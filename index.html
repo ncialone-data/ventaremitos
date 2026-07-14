@@ -1333,7 +1333,7 @@ function renderUtilidadNegativa(){
   note.textContent=window._AYER_LABEL||'último día';
   const fmtV=v=>Math.round(v).toLocaleString('es-AR');
   // Nueva escala de colores: rojo <40% | amarillo 40-50% | verde ≥50%
-  const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#facc15':'#4ade80';
+  const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#d97706':'#4ade80';
   const dot=pct=>`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dotC(pct)};margin-right:4px;vertical-align:middle;flex-shrink:0"></span>`;
   el.innerHTML=`<table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse;table-layout:fixed">
     <colgroup>
@@ -1375,7 +1375,7 @@ function renderUtilidadClientes(){
   const mesData=mesKey?CLI_AGG[mesKey]:{};
   if(!mesData||!Object.keys(mesData).length){if(note)note.textContent='sin datos';tbody.innerHTML='';return;}
   const _fmt=n=>Math.round(n).toLocaleString('es-AR');
-  const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#facc15':'#4ade80';
+  const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#d97706':'#4ade80';
   const dot=(pct,sz)=>`<span style="display:inline-block;width:${sz}px;height:${sz}px;border-radius:50%;background:${dotC(pct)};margin-right:4px;vertical-align:middle"></span>`;
   const rows=Object.values(mesData).filter(c=>c.name&&c.vta!==0);
   rows.forEach(c=>{c.util=c.vta-c.cos;c.pct=c.vta?(c.vta-c.cos)/c.vta*100:0;});

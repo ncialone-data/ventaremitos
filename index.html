@@ -151,6 +151,19 @@ body.light .mom-up{color:#2563eb}
 .track{height:13px;background:rgba(255,255,255,.05);border-radius:7px;overflow:hidden}
 .fill{height:100%;border-radius:7px;width:0;transition:width .9s cubic-bezier(.22,1,.36,1)}
 .row .amt{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--tx);text-align:right;min-width:74px}
+.com-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.com-sub{font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;font-weight:600;margin-bottom:10px}
+.com-item{padding:8px 0;border-bottom:1px solid var(--line)}
+.com-item:last-child{border-bottom:none}
+.com-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px}
+.com-name{font-size:12.5px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.com-pct{font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-weight:700;white-space:nowrap;flex:none}
+.com-barrow{display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:8px;margin-top:3px}
+.com-barlbl{font-size:9.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.04em}
+.com-amt{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--tx);text-align:right;min-width:64px}
+.pend2-row{display:grid;grid-template-columns:100px 1fr auto;align-items:center;gap:10px;padding:6px 0}
+@media(max-width:860px){.com-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.com-barrow{grid-template-columns:26px 1fr auto}.pend2-row{grid-template-columns:80px 1fr auto}}
 .chartbox{width:100%}
 svg{display:block;width:100%;overflow:visible}
 .gridln{stroke:rgba(255,255,255,.06);stroke-width:1}
@@ -436,6 +449,23 @@ svg{display:block;width:100%;overflow:visible}
     </table>
   </div>
 </div>
+
+<div class="card" style="margin-top:14px;margin-bottom:14px" id="comCard">
+  <div class="c-head">
+    <span class="c-title">Seguimiento comerciales</span>
+    <span class="c-note" id="comNote"></span>
+  </div>
+  <div class="com-grid">
+    <div>
+      <div class="com-sub">Venta por comercial</div>
+      <div id="comVentaList"></div>
+    </div>
+    <div>
+      <div class="com-sub">Pendientes por comercial</div>
+      <div id="comPendList"></div>
+    </div>
+  </div>
+</div>
 </div>
 <div id="tip"></div>
 <script>
@@ -474,6 +504,7 @@ const DAYAGG={};
 const REMS_RAW=[];  // comprobantes únicos: {comp,estado,mes,emp}
 const AYER_DATA=[];  // filas del último día con datos {prod,rawcli,ejec,vta,cos,util,pct}
 const CLI_AGG={};  // acumulado por cliente: {name,vta,cos,prods:{prodName:{vta,cos}}}
+const EJEC_ROWS=[];  // filas activas para seguimiento comerciales: {mes,rawcli,emp,rub,vta}
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
@@ -594,6 +625,7 @@ function render(){
   if(PEND_RAW)calcPendientesFiltered();
   renderUtilidadNegativa();
   renderUtilidadClientes();
+  renderComerciales();
 }
 
 function renderRanking(R){
@@ -864,6 +896,7 @@ function processRawRows(rawRows, sourceName) {
   for(const k in DAYAGG)delete DAYAGG[k];
   REMS_RAW.length=0;
   for(const k in CLI_AGG)delete CLI_AGG[k];
+  EJEC_ROWS.length=0;
   for(const k in ORIG_AGG)delete ORIG_AGG[k];
   const _seenComp=new Set();
   for(const r of rawRows) {
@@ -929,6 +962,7 @@ function processRawRows(rawRows, sourceName) {
       if(!CLI_AGG[mes][_cliKey].prods[_prodFull])CLI_AGG[mes][_cliKey].prods[_prodFull]={vta:0,cos:0};
       CLI_AGG[mes][_cliKey].prods[_prodFull].vta+=vta;
       CLI_AGG[mes][_cliKey].prods[_prodFull].cos+=cos;
+      EJEC_ROWS.push({mes,rawcli:_rawcli,emp,rub,vta});
     }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
@@ -1123,6 +1157,7 @@ function calcPendientesFiltered(){
   PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,tot:cntOk+cntAl};
   renderPendientes();
   renderGauges();
+  renderComerciales();
 }
 
 function processProductRows(rows){
@@ -1233,6 +1268,94 @@ function processClientRows(rawRows){
     const ejec=String(r['EJECUTIVO']||r['VENDEDOR']||r['ASESOR']||r['EJECUTIVO DE CUENTA']||'').trim();
     if(cod&&ejec) CLIENT_LOOKUP[cod]=ejec;
   }
+}
+
+function getEjecFromRawCli(rawcli){
+  const _c=String(rawcli||'').trim().split(/\s+/)[0];
+  return CLIENT_LOOKUP[_c]||null;
+}
+
+function renderComerciales(){
+  const note=document.getElementById('comNote');
+  const ventaEl=document.getElementById('comVentaList');
+  const pendEl=document.getElementById('comPendList');
+  if(!ventaEl||!pendEl)return;
+  const curMesKey=mesFilter||MESES[MESES.length-1];
+  const prevMesKey=curMesKey?getPrevMonth(curMesKey):null;
+  const passFE=d=>(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp))
+    &&(!empFilter||d.emp===empFilter)
+    &&(!rubFilter||d.rub===rubFilter);
+  const curRows=curMesKey?EJEC_ROWS.filter(d=>d.mes===curMesKey&&passFE(d)):[];
+  const prevRows=prevMesKey?EJEC_ROWS.filter(d=>d.mes===prevMesKey&&passFE(d)):[];
+  const aggBy=arr=>{const m={};arr.forEach(d=>{const e=getEjecFromRawCli(d.rawcli)||'Sin asignar';m[e]=(m[e]||0)+d.vta;});return m;};
+  const curAgg=aggBy(curRows), prevAgg=aggBy(prevRows);
+  const roster=new Set([...new Set(Object.values(CLIENT_LOOKUP))].filter(Boolean));
+  Object.keys(curAgg).forEach(e=>roster.add(e));
+  Object.keys(prevAgg).forEach(e=>roster.add(e));
+  let list=[...roster].map(e=>({e,cur:curAgg[e]||0,prev:prevAgg[e]||0}));
+  list=list.filter(x=>x.cur>0||x.prev>0);
+  list.sort((a,b)=>b.cur-a.cur);
+  const maxV=Math.max(...list.map(x=>Math.max(x.cur,x.prev)),1);
+  const ventaHtml=list.map(x=>{
+    let label,color;
+    if(x.prev>0){
+      const pct=x.cur/x.prev*100;
+      label=pct.toFixed(0)+'%';
+      color=pct>=51?'#4ade80':pct>=35?'#d97706':'#f87171';
+    } else if(x.cur>0){
+      label='nuevo'; color='#4ade80';
+    } else {
+      label='—'; color='var(--mut)';
+    }
+    return `<div class="com-item">
+      <div class="com-head">
+        <span class="com-name">${x.e}</span>
+        <span class="com-pct" style="color:${color}">${label}</span>
+      </div>
+      <div class="com-barrow">
+        <span class="com-barlbl">${prevMesKey?(MLBL[prevMesKey]||prevMesKey):'Ant'}</span>
+        <div class="track"><div class="fill" style="background:rgba(128,128,128,.4);width:${(x.prev/maxV*100).toFixed(1)}%"></div></div>
+        <span class="com-amt">${fmtM(x.prev)}</span>
+      </div>
+      <div class="com-barrow">
+        <span class="com-barlbl">${curMesKey?(MLBL[curMesKey]||curMesKey):'Act'}</span>
+        <div class="track"><div class="fill" style="background:${color};width:${(x.cur/maxV*100).toFixed(1)}%"></div></div>
+        <span class="com-amt">${fmtM(x.cur)}</span>
+      </div>
+    </div>`;
+  }).join('');
+  ventaEl.innerHTML=ventaHtml||'<div style="font-size:12px;color:var(--mut)">Sin datos</div>';
+  // Pendientes por comercial
+  const ELP={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
+  const pendAgg={};
+  if(PEND_RAW&&PEND_RAW.length){
+    const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;};
+    PEND_RAW.forEach(r=>{
+      const rawEmp=String(r['EMPRESA PEDIDO']||'').trim();
+      const emp=ELP[rawEmp]||rawEmp;
+      if(empGrupoFilter&&!(EMP_GRUPOS[empGrupoFilter]||[]).includes(emp))return;
+      if(empFilter&&emp!==empFilter)return;
+      const rub=String(r['RUBRO']||'OTROS').trim();
+      if(rubFilter&&rub!==rubFilter)return;
+      const rawcli=String(r['RSO']||'').trim();
+      const e=getEjecFromRawCli(rawcli)||'Sin asignar';
+      pendAgg[e]=(pendAgg[e]||0)+_n(r['TOTAL']);
+    });
+  }
+  const pendRoster=new Set([...new Set(Object.values(CLIENT_LOOKUP))].filter(Boolean));
+  Object.keys(pendAgg).forEach(e=>pendRoster.add(e));
+  let pendList=[...pendRoster].map(e=>({e,v:pendAgg[e]||0})).filter(x=>x.v>0);
+  pendList.sort((a,b)=>b.v-a.v);
+  const maxP=Math.max(...pendList.map(x=>x.v),1);
+  pendEl.innerHTML=pendList.map(x=>`
+    <div class="pend2-row">
+      <span class="com-name">${x.e}</span>
+      <div class="track"><div class="fill" style="background:#fb923c;width:${(x.v/maxP*100).toFixed(1)}%"></div></div>
+      <span class="com-amt">${fmtM(x.v)}</span>
+    </div>`).join('')||'<div style="font-size:12px;color:var(--mut)">Sin datos</div>';
+  const totCur=list.reduce((s,x)=>s+x.cur,0);
+  const totPend=pendList.reduce((s,x)=>s+x.v,0);
+  if(note)note.textContent=`${curMesKey?(MLBL[curMesKey]||curMesKey):''} vs ${prevMesKey?(MLBL[prevMesKey]||prevMesKey):''} · venta ${fmtM(totCur)} · pend ${fmtM(totPend)}`;
 }
 
 function processPendientesRows(rawRows){

@@ -161,9 +161,9 @@ body.light .mom-up{color:#2563eb}
 .com-barrow{display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:8px;margin-top:3px}
 .com-barlbl{font-size:9.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.04em}
 .com-amt{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--tx);text-align:right;min-width:64px}
-.pend2-row{display:grid;grid-template-columns:100px 1fr auto;align-items:center;gap:10px;padding:6px 0}
+.pend-barrow{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px;margin-top:4px}
 @media(max-width:860px){.com-grid{grid-template-columns:1fr}}
-@media(max-width:600px){.com-barrow{grid-template-columns:26px 1fr auto}.pend2-row{grid-template-columns:80px 1fr auto}}
+@media(max-width:600px){.com-barrow{grid-template-columns:26px 1fr auto}}
 .chartbox{width:100%}
 svg{display:block;width:100%;overflow:visible}
 .gridln{stroke:rgba(255,255,255,.06);stroke-width:1}
@@ -1082,6 +1082,7 @@ let PEND_DATA=null;
 let PEND_RAW=null;
 const PROD_LOOKUP={};
 const CLIENT_LOOKUP={}; // { codigoCliente → ejecutivo }
+const CLIENT_NAME_LOOKUP={}; // { nombreNormalizado → ejecutivo } — para cruzar por razón social (ej: pendientes)
 const ORIG_AGG={};
 const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT','TERCEROS'];
 const GAUGE_FACTORS={BARMAN:1.65,GRAFICA:1.65,TUBOS:1.65,VYMAT:1.65};
@@ -1263,16 +1264,32 @@ function renderGauges(){
 
 function processClientRows(rawRows){
   for(const k in CLIENT_LOOKUP)delete CLIENT_LOOKUP[k];
+  for(const k in CLIENT_NAME_LOOKUP)delete CLIENT_NAME_LOOKUP[k];
   for(const r of rawRows){
     const cod=String(r['CODIGO']||r['CTE']||r['COD']||r['CLIENTE COD']||'').trim();
     const ejec=String(r['EJECUTIVO']||r['VENDEDOR']||r['ASESOR']||r['EJECUTIVO DE CUENTA']||'').trim();
     if(cod&&ejec) CLIENT_LOOKUP[cod]=ejec;
+    if(ejec){
+      const nomCliente=normName(r['CLIENTE']);
+      const nomFantasia=normName(r['FANTASIA']);
+      if(nomCliente) CLIENT_NAME_LOOKUP[nomCliente]=ejec;
+      if(nomFantasia) CLIENT_NAME_LOOKUP[nomFantasia]=ejec;
+    }
   }
 }
 
 function getEjecFromRawCli(rawcli){
   const _c=String(rawcli||'').trim().split(/\s+/)[0];
   return CLIENT_LOOKUP[_c]||null;
+}
+
+// Normaliza nombres/razón social para cruzar entre solapas con formatos distintos
+function normName(s){
+  return String(s||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[.,]/g,'').replace(/\s+/g,' ').trim();
+}
+function getEjecFromName(name){
+  const n=normName(name);
+  return n?(CLIENT_NAME_LOOKUP[n]||null):null;
 }
 
 function renderComerciales(){
@@ -1299,8 +1316,9 @@ function renderComerciales(){
   const ventaHtml=list.map(x=>{
     let label,color;
     if(x.prev>0){
-      const pct=x.cur/x.prev*100;
-      label=pct.toFixed(0)+'%';
+      const pct=(x.cur-x.prev)/x.prev*100;
+      const sign=pct>=0?'+':'';
+      label=sign+pct.toFixed(0)+'%';
       color=pct>=51?'#4ade80':pct>=35?'#d97706':'#f87171';
     } else if(x.cur>0){
       label='nuevo'; color='#4ade80';
@@ -1338,7 +1356,7 @@ function renderComerciales(){
       const rub=String(r['RUBRO']||'OTROS').trim();
       if(rubFilter&&rub!==rubFilter)return;
       const rawcli=String(r['RSO']||'').trim();
-      const e=getEjecFromRawCli(rawcli)||'Sin asignar';
+      const e=getEjecFromName(rawcli)||'Sin asignar';
       pendAgg[e]=(pendAgg[e]||0)+_n(r['TOTAL']);
     });
   }
@@ -1348,10 +1366,12 @@ function renderComerciales(){
   pendList.sort((a,b)=>b.v-a.v);
   const maxP=Math.max(...pendList.map(x=>x.v),1);
   pendEl.innerHTML=pendList.map(x=>`
-    <div class="pend2-row">
-      <span class="com-name">${x.e}</span>
-      <div class="track"><div class="fill" style="background:#fb923c;width:${(x.v/maxP*100).toFixed(1)}%"></div></div>
-      <span class="com-amt">${fmtM(x.v)}</span>
+    <div class="com-item">
+      <div class="com-head"><span class="com-name">${x.e}</span></div>
+      <div class="pend-barrow">
+        <div class="track"><div class="fill" style="background:#fb923c;width:${(x.v/maxP*100).toFixed(1)}%"></div></div>
+        <span class="com-amt">${fmtM(x.v)}</span>
+      </div>
     </div>`).join('')||'<div style="font-size:12px;color:var(--mut)">Sin datos</div>';
   const totCur=list.reduce((s,x)=>s+x.cur,0);
   const totPend=pendList.reduce((s,x)=>s+x.v,0);

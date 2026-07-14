@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Remitos 2026</title>
+<title>Tablero avance de ventas</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Outfit:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -242,7 +242,7 @@ svg{display:block;width:100%;overflow:visible}
 
 <header>
   <div class="brand">
-    <h1>Remitos <b>2026</b></h1>
+    <h1>Tablero avance de <b>ventas</b></h1>
     <div class="sub"><span class="dot"></span><span id="periodo"></span></div>
   </div>
   <div style="display:flex;align-items:center;gap:14px">
@@ -403,7 +403,7 @@ svg{display:block;width:100%;overflow:visible}
 
 <div class="card" style="margin-top:14px;margin-bottom:14px" id="ayerCard">
   <div class="c-hd">
-    <span class="c-title">Utilidad negativa ayer</span>
+    <span class="c-title">Utilidad negativa</span>
     <span class="c-note" id="ayerNote">actualizá los datos para cargar</span>
   </div>
   <div id="ayerTable"></div>
@@ -760,7 +760,7 @@ function renderEstados(R,total){
       <div class="tipo-dot" style="background:${col};box-shadow:0 0 8px ${col}88"></div>
       <div class="tipo-info">
         <div class="tipo-name" style="color:${col}">${estado}</div>
-        <div class="tipo-val">${fmtM(monto)}</div>
+        <div class="tipo-val">${fmtFull(monto)}</div>
         <div class="tipo-sub">${n.toLocaleString('es-AR')} remitos · ${pct}% del total</div>
       </div>
     </div>`;

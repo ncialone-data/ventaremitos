@@ -474,15 +474,9 @@ svg{display:block;width:100%;overflow:visible}
     <span class="c-title">Seguimiento comerciales</span>
     <span class="c-note" id="comNote"></span>
   </div>
-  <div class="com-grid">
-    <div>
-      <div class="com-sub">Venta por comercial</div>
-      <div id="comVentaList"></div>
-    </div>
-    <div>
-      <div class="com-sub">Pendientes por comercial</div>
-      <div id="comPendList"></div>
-    </div>
+  <div>
+    <div class="com-sub">Venta por comercial</div>
+    <div id="comVentaList"></div>
   </div>
 </div>
 
@@ -496,7 +490,7 @@ svg{display:block;width:100%;overflow:visible}
 
 <div class="card" style="margin-top:14px;margin-bottom:14px" id="pendComCard">
   <div class="c-head">
-    <span class="c-title">Pendientes por comercial · mes actual</span>
+    <span class="c-title">Pendientes por comercial</span>
     <span class="c-note" id="pendComercialNote"></span>
   </div>
   <div id="pendComercialWrap"></div>
@@ -1128,8 +1122,8 @@ let pendSortCol='total'; // columna activa de orden
 let pendSortDir='desc'; // 'asc' | 'desc'
 let remSortCol='vta'; let remSortDir='desc'; // orden tabla "Remitos por comercial"
 const remExpanded=new Set(); // comerciales expandidos en "Remitos por comercial"
-let pendComSortCol='vta'; let pendComSortDir='desc'; // orden tabla "Pendientes por comercial · mes actual"
-const pendComExpanded=new Set(); // comerciales expandidos en "Pendientes por comercial · mes actual"
+let pendComSortCol='vta'; let pendComSortDir='desc'; // orden tabla "Pendientes por comercial" (historico completo)
+const pendComExpanded=new Set(); // comerciales expandidos en "Pendientes por comercial" (historico completo)
 const PROD_LOOKUP={};
 const CLIENT_LOOKUP={}; // { codigoCliente → ejecutivo }
 const CLIENT_NAME_LOOKUP={}; // { nombreNormalizado → ejecutivo } — para cruzar por razón social (ej: pendientes)
@@ -1432,7 +1426,11 @@ function renderGaugesDiario(){
 function processClientRows(rawRows){
   for(const k in CLIENT_LOOKUP)delete CLIENT_LOOKUP[k];
   for(const k in CLIENT_NAME_LOOKUP)delete CLIENT_NAME_LOOKUP[k];
+  const isActivo=r=>normName(r['ESTADO'])==='ACTIVO';
+  // 1er paso: solo filas con ESTADO=Activo. Si dos clientes distintos normalizan igual
+  // (mismo nombre/fantasia) y uno esta Inactivo/Suspendido/Incobrable, gana el Activo.
   for(const r of rawRows){
+    if(!isActivo(r))continue;
     const cod=String(r['CODIGO']||r['CTE']||r['COD']||r['CLIENTE COD']||'').trim();
     const ejec=String(r['EJECUTIVO']||r['VENDEDOR']||r['ASESOR']||r['EJECUTIVO DE CUENTA']||'').trim();
     if(cod&&ejec) CLIENT_LOOKUP[cod]=ejec;
@@ -1441,6 +1439,19 @@ function processClientRows(rawRows){
       const nomFantasia=normName(r['FANTASIA']);
       if(nomCliente) CLIENT_NAME_LOOKUP[nomCliente]=ejec;
       if(nomFantasia) CLIENT_NAME_LOOKUP[nomFantasia]=ejec;
+    }
+  }
+  // 2do paso: completa codigos/nombres que no tuvieron ninguna fila Activa,
+  // usando cualquier otro estado (Inactivo/Suspendido/Incobrable/vacio) como fallback.
+  for(const r of rawRows){
+    const cod=String(r['CODIGO']||r['CTE']||r['COD']||r['CLIENTE COD']||'').trim();
+    const ejec=String(r['EJECUTIVO']||r['VENDEDOR']||r['ASESOR']||r['EJECUTIVO DE CUENTA']||'').trim();
+    if(cod&&ejec&&!CLIENT_LOOKUP[cod]) CLIENT_LOOKUP[cod]=ejec;
+    if(ejec){
+      const nomCliente=normName(r['CLIENTE']);
+      const nomFantasia=normName(r['FANTASIA']);
+      if(nomCliente&&!CLIENT_NAME_LOOKUP[nomCliente]) CLIENT_NAME_LOOKUP[nomCliente]=ejec;
+      if(nomFantasia&&!CLIENT_NAME_LOOKUP[nomFantasia]) CLIENT_NAME_LOOKUP[nomFantasia]=ejec;
     }
   }
 }
@@ -1546,15 +1557,13 @@ function renderRemitosPorComercial(){
 function renderPendientesPorComercial(){
   const wrap=document.getElementById('pendComercialWrap');
   if(!wrap)return;
-  const curMes=MESES[MESES.length-1];
-  if(!curMes||!PEND_LIST||!PEND_LIST.length){ wrap.innerHTML=''; return; }
-  const [y,mo]=curMes.split('-').map(Number);
+  if(!PEND_LIST||!PEND_LIST.length){ wrap.innerHTML=''; return; }
   const ELP={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
   const rowsMes=PEND_LIST.filter(p=>{
-    if(!(p.fecha.getFullYear()===y&&(p.fecha.getMonth()+1)===mo))return false;
     const emp=ELP[p.emp]||p.emp;
     if(empGrupoFilter&&!(EMP_GRUPOS[empGrupoFilter]||[]).includes(emp))return false;
     if(empFilter&&emp!==empFilter)return false;
+    if(rubFilter&&p.rubro!==rubFilter)return false;
     return true;
   });
   const grouped={};
@@ -1623,14 +1632,13 @@ function renderDetalleComercialNote(){
   const curMes=MESES[MESES.length-1];
   const txt=curMes?(MLBL[curMes]||curMes):'';
   const n1=document.getElementById('remComercialNote'); if(n1)n1.textContent=txt;
-  const n2=document.getElementById('pendComercialNote'); if(n2)n2.textContent=txt;
+  const n2=document.getElementById('pendComercialNote'); if(n2)n2.textContent='histórico completo';
 }
 
 function renderComerciales(){
   const note=document.getElementById('comNote');
   const ventaEl=document.getElementById('comVentaList');
-  const pendEl=document.getElementById('comPendList');
-  if(!ventaEl||!pendEl)return;
+  if(!ventaEl)return;
   const curMesKey=mesFilter||MESES[MESES.length-1];
   const prevMesKey=curMesKey?getPrevMonth(curMesKey):null;
   const passFE=d=>(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp))
@@ -1677,39 +1685,8 @@ function renderComerciales(){
     </div>`;
   }).join('');
   ventaEl.innerHTML=ventaHtml||'<div style="font-size:12px;color:var(--mut)">Sin datos</div>';
-  // Pendientes por comercial
-  const ELP={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
-  const pendAgg={};
-  if(PEND_RAW&&PEND_RAW.length){
-    const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;};
-    PEND_RAW.forEach(r=>{
-      const rawEmp=String(r['EMPRESA PEDIDO']||'').trim();
-      const emp=ELP[rawEmp]||rawEmp;
-      if(empGrupoFilter&&!(EMP_GRUPOS[empGrupoFilter]||[]).includes(emp))return;
-      if(empFilter&&emp!==empFilter)return;
-      const rub=String(r['RUBRO']||'OTROS').trim();
-      if(rubFilter&&rub!==rubFilter)return;
-      const rawcli=String(r['RSO']||'').trim();
-      const e=getEjecFromName(rawcli)||'Sin asignar';
-      pendAgg[e]=(pendAgg[e]||0)+_n(r['TOTAL']);
-    });
-  }
-  const pendRoster=new Set([...new Set(Object.values(CLIENT_LOOKUP))].filter(Boolean));
-  Object.keys(pendAgg).forEach(e=>pendRoster.add(e));
-  let pendList=[...pendRoster].map(e=>({e,v:pendAgg[e]||0})).filter(x=>x.v>0);
-  pendList.sort((a,b)=>b.v-a.v);
-  const maxP=Math.max(...pendList.map(x=>x.v),1);
-  pendEl.innerHTML=pendList.map(x=>`
-    <div class="com-item">
-      <div class="com-head"><span class="com-name">${x.e}</span></div>
-      <div class="pend-barrow">
-        <div class="track"><div class="fill" style="background:#fb923c;width:${(x.v/maxP*100).toFixed(1)}%"></div></div>
-        <span class="com-amt">${fmtM(x.v)}</span>
-      </div>
-    </div>`).join('')||'<div style="font-size:12px;color:var(--mut)">Sin datos</div>';
   const totCur=list.reduce((s,x)=>s+x.cur,0);
-  const totPend=pendList.reduce((s,x)=>s+x.v,0);
-  if(note)note.textContent=`${curMesKey?(MLBL[curMesKey]||curMesKey):''} vs ${prevMesKey?(MLBL[prevMesKey]||prevMesKey):''} · venta ${fmtM(totCur)} · pend ${fmtM(totPend)}`;
+  if(note)note.textContent=`${curMesKey?(MLBL[curMesKey]||curMesKey):''} vs ${prevMesKey?(MLBL[prevMesKey]||prevMesKey):''} · venta ${fmtM(totCur)}`;
 }
 
 function processPendientesRows(rawRows){
@@ -1915,4 +1892,6 @@ function renderUtilidadClientes(){
   tbody.appendChild(totRow);
 }
 </script>
-</body                        
+</body>
+</html>
+<!-- 74 - Dashboard ventas REM 2026 - resolucion cliente activo por estado: se corrige processClientRows() para que, cuando dos filas de LISTADO CLIENTES normalizan al mismo nombre/fantasia (colision), se priorice la fila con columna ESTADO = Activo por sobre Inactivo/Suspendido/Incobrable/vacio, tanto para CLIENT_LOOKUP (por codigo) como para CLIENT_NAME_LOOKUP (por nombre, usado en Pendientes por comercial). Antes ganaba la ultima fila leida del sheet sin importar el estado, lo que podia asignar un cliente al ejecutivo de un registro viejo/dado de baja (ej: PAPELERA CENTRAL SRL apareciendo con Oscar Sturla en vez de Andrea). -->

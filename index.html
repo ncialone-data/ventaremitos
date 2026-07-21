@@ -1277,7 +1277,8 @@ function calcPendientesFiltered(){
         fecha:fd,total:0,
         rso:String(r['RSO']||'').trim(),
         rubro:String(r['RUBRO']||'OTROS').trim(),
-        emp:String(r['EMPRESA PEDIDO']||'').trim()
+        emp:String(r['EMPRESA PEDIDO']||'').trim(),
+        vendedor:String(r['VENDEDOR']||'').trim()
       };
     }
     peds[num].total+=total;
@@ -1287,7 +1288,7 @@ function calcPendientesFiltered(){
   for(const k in peds){
     const p=peds[k];
     const dias=Math.floor((today-p.fecha)/86400000);
-    PEND_LIST.push({num:k,fecha:p.fecha,dias,rso:p.rso,rubro:p.rubro,emp:p.emp,total:p.total});
+    PEND_LIST.push({num:k,fecha:p.fecha,dias,rso:p.rso,rubro:p.rubro,emp:p.emp,total:p.total,vendedor:p.vendedor});
     if(dias<=45){cntOk++;vtaOk+=p.total;}else{cntAl++;vtaAl+=p.total;}
   }
   PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,tot:cntOk+cntAl};
@@ -1568,16 +1569,15 @@ function renderPendientesPorComercial(){
   });
   const grouped={};
   rowsMes.forEach(p=>{
-    const ejec=getEjecFromName(p.rso)||'Sin asignar';
-    const cliKey=p.rso||'(sin cliente)';
-    if(!grouped[ejec])grouped[ejec]={};
-    grouped[ejec][cliKey]=(grouped[ejec][cliKey]||0)+p.total;
+    const ejec=p.vendedor||'Sin asignar';
+    if(!grouped[ejec])grouped[ejec]=[];
+    grouped[ejec].push(p);
   });
   const fmtV=v=>Math.round(v).toLocaleString('es-AR');
-  let grupos=Object.entries(grouped).map(([ejec,clientes])=>{
-    const arr=Object.entries(clientes).map(([cli,vta])=>({cli,vta})).filter(x=>x.vta!==0);
-    arr.sort((a,b)=>b.vta-a.vta);
-    const totVta=arr.reduce((s,x)=>s+x.vta,0);
+  const mn2=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  let grupos=Object.entries(grouped).map(([ejec,peds])=>{
+    const arr=peds.filter(p=>p.total!==0).slice().sort((a,b)=>b.dias-a.dias);
+    const totVta=arr.reduce((s,x)=>s+x.total,0);
     return {ejec,arr,totVta};
   }).filter(g=>g.arr.length);
   const sorters={ejec:(a,b)=>a.ejec.localeCompare(b.ejec,'es'),vta:(a,b)=>a.totVta-b.totVta};
@@ -1586,9 +1586,12 @@ function renderPendientesPorComercial(){
   const arrow=col=>pendComSortCol===col?(pendComSortDir==='asc'?' ▲':' ▼'):'';
   const thCol=col=>pendComSortCol===col?'var(--acc)':'var(--tx)';
   const cols=[
-    {key:'ejec',label:'COMERCIAL',w:'16%',align:'left',sortable:true},
-    {key:null, label:'CLIENTE',w:'60%',align:'left',sortable:false},
-    {key:'vta',label:'IMPORTE DE VENTA',w:'24%',align:'right',sortable:true}
+    {key:'ejec',label:'COMERCIAL',w:'13%',align:'left',sortable:true},
+    {key:null, label:'FECHA',w:'11%',align:'center',sortable:false},
+    {key:null, label:'N° PEDIDO',w:'13%',align:'left',sortable:false},
+    {key:null, label:'CLIENTE',w:'27%',align:'left',sortable:false},
+    {key:null, label:'DÍAS',w:'10%',align:'center',sortable:false},
+    {key:'vta',label:'IMPORTE',w:'26%',align:'right',sortable:true}
   ];
   const theadHtml=`<thead><tr style="border-bottom:1px solid var(--line2)">
     ${cols.map(c=>`<th ${c.sortable?`data-col="${c.key}"`:''} style="padding:5px 8px;text-align:${c.align};font-weight:600;${c.sortable?'cursor:pointer;user-select:none;':''}position:sticky;top:0;background:var(--panel2);z-index:2;color:${c.sortable?thCol(c.key):'var(--tx)'}">${c.label}${c.sortable?arrow(c.key):''}</th>`).join('')}
@@ -1597,16 +1600,23 @@ function renderPendientesPorComercial(){
     const isOpen=pendComExpanded.has(g.ejec);
     const arrowIcon=isOpen?'▼':'▶';
     const groupRow=`<tr class="pendcom-group-row" data-ejec="${g.ejec}" style="cursor:pointer;font-weight:700;border-bottom:1px solid var(--line2)">
-      <td colspan="2" style="padding:6px 8px"><span style="display:inline-block;width:14px;color:var(--mut)">${arrowIcon}</span>${g.ejec}</td>
+      <td colspan="5" style="padding:6px 8px"><span style="display:inline-block;width:14px;color:var(--mut)">${arrowIcon}</span>${g.ejec}</td>
       <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(g.totVta)}</td>
     </tr>`;
-    const subRows=g.arr.map(x=>`<tr class="pendcom-sub-row" data-ejec="${g.ejec}" style="${isOpen?'':'display:none;'}background:rgba(128,128,128,.04);border-bottom:1px solid var(--line)">
+    const subRows=g.arr.map(p=>{
+      const fechaStr=`${p.fecha.getDate()} ${mn2[p.fecha.getMonth()]} ${p.fecha.getFullYear()}`;
+      const diaCol=p.dias>45?'#f87171':'var(--tx)';
+      return `<tr class="pendcom-sub-row" data-ejec="${g.ejec}" style="${isOpen?'':'display:none;'}background:rgba(128,128,128,.04);border-bottom:1px solid var(--line)">
       <td style="padding:4px 8px 4px 28px"></td>
-      <td style="padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${x.cli}</td>
-      <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(x.vta)}</td>
-    </tr>`).join('');
+      <td style="padding:4px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${fechaStr}</td>
+      <td style="padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'IBM Plex Mono',monospace">${p.num}</td>
+      <td style="padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.rso||'—'}</td>
+      <td style="padding:4px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${diaCol}">${p.dias}</td>
+      <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.total)}</td>
+    </tr>`;
+    }).join('');
     return groupRow+subRows;
-  }).join('')||'<tr><td colspan="3" style="padding:8px;font-size:12px;color:var(--mut)">Sin datos</td></tr>';
+  }).join('')||'<tr><td colspan="6" style="padding:8px;font-size:12px;color:var(--mut)">Sin datos</td></tr>';
   wrap.innerHTML=`<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
     <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
     ${theadHtml}
@@ -1894,4 +1904,4 @@ function renderUtilidadClientes(){
 </script>
 </body>
 </html>
-<!-- 74 - Dashboard ventas REM 2026 - resolucion cliente activo por estado: se corrige processClientRows() para que, cuando dos filas de LISTADO CLIENTES normalizan al mismo nombre/fantasia (colision), se priorice la fila con columna ESTADO = Activo por sobre Inactivo/Suspendido/Incobrable/vacio, tanto para CLIENT_LOOKUP (por codigo) como para CLIENT_NAME_LOOKUP (por nombre, usado en Pendientes por comercial). Antes ganaba la ultima fila leida del sheet sin importar el estado, lo que podia asignar un cliente al ejecutivo de un registro viejo/dado de baja (ej: PAPELERA CENTRAL SRL apareciendo con Oscar Sturla en vez de Andrea). -->
+<!-- 78 - Dashboard ventas REM 2026 - orden por dias en detalle pendientes comercial: se cambia el orden por defecto de los pedidos dentro de cada comercial desplegado en "Pendientes por comercial", de importe descendente a DÍAS descendente (el pedido con mas dias pendiente aparece primero). Cambio puntual en renderPendientesPorComercial(): arr.sort ahora compara por p.dias en vez de p.total. -->

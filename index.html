@@ -967,8 +967,13 @@ function processRawRows(rawRows, sourceName) {
       if(!DAYAGG[mes])DAYAGG[mes]={};
       DAYAGG[mes][dayNum]=(DAYAGG[mes][dayNum]||0)+vta;
       // Acumular por ORIGEN para velocímetros
-      const _pcode=String(r['PRODUCTO']||'').trim().split(/\s+/)[0].toUpperCase();
-      const _origRaw=PROD_LOOKUP[_pcode]||'TERCEROS';
+      const _prodNombre=String(r['PRODUCTO']||'').trim();
+      const _pcode=_prodNombre.split(/\s+/)[0].toUpperCase();
+      let _origRaw=PROD_LOOKUP[_pcode]||'TERCEROS';
+      // Corrección manual: todo producto "MANTEL" se reporta como GRAFICA, sin importar
+      // lo que diga el ABM de productos del ERP (hay códigos de mantel mal cargados como
+      // BARMAN/otros que todavía no fueron corregidos en el ERP) — pedido 23/07/2026
+      if(/MANTEL/i.test(_prodNombre)) _origRaw='GRAFICA';
       // PROPIO excluido por ahora (sin gauge); no encontrado → TERCEROS
       const _orig=(_origRaw==='PROPIO')?null:_origRaw;
       if(_orig){

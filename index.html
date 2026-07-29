@@ -1365,6 +1365,14 @@ function countWorkingDaysUntil(year, monthIndex0, dayMax){
   return count;
 }
 
+// Cuenta los días hábiles que tiene el mes completo (lun a sáb) — pedido 29/07/2026:
+// reemplaza el divisor fijo de 22 para que "Importe diario esperado" sea dinámico según
+// la cantidad real de días hábiles de cada mes (ej: julio 2026 tiene 27, no 22)
+function countWorkingDaysInMonth(year, monthIndex0){
+  const totalDays=new Date(year, monthIndex0+1, 0).getDate();
+  return countWorkingDaysUntil(year, monthIndex0, totalDays);
+}
+
 function renderGauges(){
   if(!MESES.length)return;
   const curMes=MESES[MESES.length-1];
@@ -1405,16 +1413,20 @@ function renderGaugesDiario(){
   const ayer=new Date(); ayer.setDate(ayer.getDate()-1);
   const diaCorte=(ayer.getFullYear()===y&&(ayer.getMonth()+1)===mo)?ayer.getDate():0;
   const diasLaborales=countWorkingDaysUntil(y, mo-1, diaCorte);
+  const diasLaboralesMes=countWorkingDaysInMonth(y, mo-1);
   const _infoRowD=document.getElementById('infoRowDiario');
   _infoRowD.innerHTML=FABRICAS_GAUGE.map(f=>{
-    const objDiario=(GAUGE_OBJETIVOS[f]||0)/22;
+    const obj=GAUGE_OBJETIVOS[f]||0;
+    const objDiario=obj/(diasLaboralesMes||22);
     const objEsperado=objDiario*diasLaborales;
     const actual=getOrigVtaHastaDia(f,curMes,diaCorte);
     const pctCol2=actual>=objEsperado?'var(--teal)':'#f87171';
     return `<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
       <div style="font-size:10px;color:var(--mut2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;font-weight:600">${f}</div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Objetivo: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(obj)}</span></div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Días hábiles del mes: <span style="font-family:'IBM Plex Mono',monospace;color:var(--tx)">${diasLaboralesMes}</span></div>
       <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Importe diario esperado: <span style="font-family:'IBM Plex Mono',monospace;color:var(--tx)">${fmtM(objDiario)}</span></div>
-      <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Días laborales: <span style="font-family:'IBM Plex Mono',monospace;color:var(--tx)">${diasLaborales}</span></div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Días laborales transcurridos: <span style="font-family:'IBM Plex Mono',monospace;color:var(--tx)">${diasLaborales}</span></div>
       <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Esperado a hoy: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(objEsperado)}</span></div>
       <div style="font-size:11px;color:var(--mut)">Venta actual: <span style="font-family:'IBM Plex Mono',monospace;color:${pctCol2}">${fmtM(actual)}</span></div>
     </div>`;
@@ -1422,7 +1434,7 @@ function renderGaugesDiario(){
   document.getElementById('gaugesNoteDiario').textContent=diaCorte>0?`día ${diaCorte} de ${MLBL[curMes]||curMes} · ${diasLaborales} días hábiles transcurridos`:'sin días hábiles transcurridos aún';
   const gridD=document.getElementById('gaugesGridDiario');
   gridD.innerHTML=FABRICAS_GAUGE.map(f=>{
-    const objDiario=(GAUGE_OBJETIVOS[f]||0)/22;
+    const objDiario=(GAUGE_OBJETIVOS[f]||0)/(diasLaboralesMes||22);
     const objEsperado=objDiario*diasLaborales;
     const actual=getOrigVtaHastaDia(f,curMes,diaCorte);
     const pct=objEsperado>0?actual/objEsperado:0;

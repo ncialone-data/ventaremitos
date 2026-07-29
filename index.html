@@ -547,13 +547,16 @@ const hideTip=()=>tip.style.opacity='0';
 
 function render(){
   const R=rows();
-  const ACTIVOS=['Firmada','Ingresada','Reparto','Transito'];
+  // Venta activa (KPIs y gráficos de arriba): ya NO contempla Transito — pedido 29/07/2026.
+  // Los gauges "Cumplimiento por fábrica" y "Seguimiento comerciales" siguen incluyendo Transito
+  // (se calculan aparte, con ORIG_AGG/EJEC_ROWS en processRawRows, sin tocar).
+  const ACTIVOS=['Firmada','Ingresada','Reparto'];
   const Rfirm=R.filter(d=>ACTIVOS.includes(d.e));
   const totalVta=Rfirm.reduce((s,d)=>s+d.v,0);
   const totalCos=Rfirm.reduce((s,d)=>s+d.o,0);
   const margenAvg=totalVta>0?(totalVta-totalCos)/totalVta*100:0;
   const clientes=new Set(
-    REMS_RAW.filter(d=>['Firmada','Ingresada','Reparto','Transito'].includes(d.estado)
+    REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)
       &&(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
     .map(d=>d.rawcli)
   ).size;
@@ -561,12 +564,12 @@ function render(){
   let clientesNuevos = null;
   if(mesFilter){
     const cliActual=new Set(
-      REMS_RAW.filter(d=>['Firmada','Ingresada','Reparto','Transito'].includes(d.estado)
+      REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)
         &&d.mes===mesFilter&&(!empFilter||d.emp===empFilter))
       .map(d=>d.rawcli)
     );
     const cliAnteriores=new Set(
-      REMS_RAW.filter(d=>['Firmada','Ingresada','Reparto','Transito'].includes(d.estado)
+      REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)
         &&d.mes<mesFilter&&(!empFilter||d.emp===empFilter))
       .map(d=>d.rawcli)
     );
@@ -632,7 +635,7 @@ function render(){
   document.getElementById('kpis').innerHTML=
     `<div class="kpi acc"><div class="k-lbl">Venta activa</div>
       <div class="k-val full">${fmtFull(totalVta)}</div>
-      <div class="k-sub">${empFilter||'todas las empresas'}</div></div>`+
+      <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito</div></div>`+
     objCard+momCard+
     `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
       <div class="k-val">${fmtPct(margenAvg)}</div>
@@ -680,7 +683,7 @@ function renderRanking(R){
 }
 
 function renderMonth(R){
-  document.getElementById('evNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto+Transito';
+  document.getElementById('evNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto';
   const byM=MESES.map(m=>R.filter(d=>d.m===m).reduce((s,d)=>s+d.v,0));
   const max=Math.max(...byM.map(Math.abs),1);
   const W=520,H=240,padL=18,padR=14,padB=34,padT=18;
@@ -759,7 +762,7 @@ function renderMargen(R){
     const cos=mrs.reduce((s,d)=>s+d.o,0);
     return vta>0?{v:(vta-cos)/vta*100,vta,cos}:null;
   });
-  document.getElementById('mrgNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto+Transito';
+  document.getElementById('mrgNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto';
   const vals=byM.filter(Boolean).map(b=>b.v);
   if(!vals.length){document.getElementById('margenChart').innerHTML='';return;}
   const minV=Math.min(...vals,0),maxV=Math.max(...vals,100);
@@ -964,8 +967,13 @@ function processRawRows(rawRows, sourceName) {
     const cos = _n(r['COSTO IMPORTE']);
     const qty = _n(r['CANTIDAD']);
     if(['Firmada','Ingresada','Reparto','Transito'].includes(estado)){
-      if(!DAYAGG[mes])DAYAGG[mes]={};
-      DAYAGG[mes][dayNum]=(DAYAGG[mes][dayNum]||0)+vta;
+      // DAYAGG alimenta el KPI "vs. mes anterior": ya NO contempla Transito (pedido 29/07/2026).
+      // Los gauges por fábrica (ORIG_AGG/ORIG_DAYAGG) y Seguimiento comerciales (EJEC_ROWS), más
+      // abajo en este mismo bloque, siguen incluyendo Transito sin cambios.
+      if(estado!=='Transito'){
+        if(!DAYAGG[mes])DAYAGG[mes]={};
+        DAYAGG[mes][dayNum]=(DAYAGG[mes][dayNum]||0)+vta;
+      }
       // Acumular por ORIGEN para velocímetros
       const _prodNombre=String(r['PRODUCTO']||'').trim();
       const _pcode=_prodNombre.split(/\s+/)[0].toUpperCase();
@@ -1086,9 +1094,9 @@ function processRawRows(rawRows, sourceName) {
     document.getElementById('clearEmpGrupoBtn').classList.add('hide');
     render();
   };
-  const tot=DATA.filter(d=>['Firmada','Ingresada','Reparto','Transito'].includes(d.e)).reduce((s,d)=>s+d.v,0);
+  const tot=DATA.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.e)).reduce((s,d)=>s+d.v,0);
   document.getElementById('periodo').textContent=
-    `${DATA.length.toLocaleString('es-AR')} registros · ${MLBL[ms[0]]}–${MLBL[ms[ms.length-1]]} · ${fmtM(tot)} activos (Firm+Ing+Rep+Trans)`;
+    `${DATA.length.toLocaleString('es-AR')} registros · ${MLBL[ms[0]]}–${MLBL[ms[ms.length-1]]} · ${fmtM(tot)} activos (Firm+Ing+Rep)`;
   const totalRaw=cnt+skipped;
   status.textContent=`✓ ${sourceName} · ${totalRaw.toLocaleString('es-AR')} filas`;
   render();
@@ -1749,10 +1757,10 @@ document.querySelectorAll('#mesSeg button').forEach(b=>{
 document.getElementById('clearEmpBtn').onclick=()=>{empFilter=null;render();};
 document.getElementById('clearRubBtn').onclick=()=>{rubFilter=null;document.querySelectorAll('#rubSeg button').forEach(b=>b.classList.remove('on'));render();};
 
-const _firm=DATA.filter(d=>['Firmada','Ingresada','Reparto','Transito'].includes(d.e));
+const _firm=DATA.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.e));
 const _tot=_firm.reduce((s,d)=>s+d.v,0);
 document.getElementById('periodo').textContent=
-  `${DATA.length.toLocaleString('es-AR')} registros · ene–jun 2026 · ${fmtM(_tot)} activos (Firm+Ing+Rep+Trans)`;
+  `${DATA.length.toLocaleString('es-AR')} registros · ene–jun 2026 · ${fmtM(_tot)} activos (Firm+Ing+Rep)`;
 
 // Restaurar preferencia ANTES del primer render (default: claro)
 try{

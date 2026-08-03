@@ -1410,8 +1410,25 @@ function renderGaugesDiario(){
   if(!MESES.length)return;
   const curMes=MESES[MESES.length-1];
   const [y,mo]=curMes.split('-').map(Number);
-  const ayer=new Date(); ayer.setDate(ayer.getDate()-1);
-  const diaCorte=(ayer.getFullYear()===y&&(ayer.getMonth()+1)===mo)?ayer.getDate():0;
+  // Día de corte dentro de curMes (el último mes con datos reales).
+  // Antes se comparaba siempre contra "ayer" según la fecha real del sistema: si el
+  // calendario ya avanzó a un mes nuevo pero todavía no llegó ninguna fila de ese mes
+  // (ej: hoy es agosto y el último mes con datos sigue siendo julio), "ayer" caía fuera
+  // de curMes y diaCorte quedaba en 0 — mostrando 0% como si se estuviera esperando datos
+  // de agosto, en vez de mostrar julio completo. Pedido 03/08/2026: si curMes ya no es el
+  // mes calendario actual, se lo trata como mes CERRADO (transcurrieron todos sus días).
+  const hoyReal=new Date();
+  const mesHoyKey=`${hoyReal.getFullYear()}-${String(hoyReal.getMonth()+1).padStart(2,'0')}`;
+  const mesCerrado=curMes!==mesHoyKey;
+  let diaCorte;
+  if(!mesCerrado){
+    const ayer=new Date(); ayer.setDate(ayer.getDate()-1);
+    diaCorte=(ayer.getFullYear()===y&&(ayer.getMonth()+1)===mo)?ayer.getDate():0;
+  } else if(curMes<mesHoyKey){
+    diaCorte=new Date(y, mo, 0).getDate(); // mes ya cerrado: se toman todos sus días
+  } else {
+    diaCorte=0; // no debería pasar (curMes posterior a hoy)
+  }
   const diasLaborales=countWorkingDaysUntil(y, mo-1, diaCorte);
   const diasLaboralesMes=countWorkingDaysInMonth(y, mo-1);
   const _infoRowD=document.getElementById('infoRowDiario');
@@ -1431,7 +1448,9 @@ function renderGaugesDiario(){
       <div style="font-size:11px;color:var(--mut)">Venta actual: <span style="font-family:'IBM Plex Mono',monospace;color:${pctCol2}">${fmtM(actual)}</span></div>
     </div>`;
   }).join('');
-  document.getElementById('gaugesNoteDiario').textContent=diaCorte>0?`día ${diaCorte} de ${MLBL[curMes]||curMes} · ${diasLaborales} días hábiles transcurridos`:'sin días hábiles transcurridos aún';
+  document.getElementById('gaugesNoteDiario').textContent=mesCerrado
+    ? `${MLBL[curMes]||curMes} completo · ${diasLaborales} días hábiles`
+    : (diaCorte>0?`día ${diaCorte} de ${MLBL[curMes]||curMes} · ${diasLaborales} días hábiles transcurridos`:'sin días hábiles transcurridos aún');
   const gridD=document.getElementById('gaugesGridDiario');
   gridD.innerHTML=FABRICAS_GAUGE.map(f=>{
     const objDiario=(GAUGE_OBJETIVOS[f]||0)/(diasLaboralesMes||22);
@@ -1930,3 +1949,6 @@ function renderUtilidadClientes(){
 </body>
 </html>
 <!-- 78 - Dashboard ventas REM 2026 - orden por dias en detalle pendientes comercial: se cambia el orden por defecto de los pedidos dentro de cada comercial desplegado en "Pendientes por comercial", de importe descendente a DÍAS descendente (el pedido con mas dias pendiente aparece primero). Cambio puntual en renderPendientesPorComercial(): arr.sort ahora compara por p.dias en vez de p.total. -->
+<!-- 88 - Dashboard ventas REM 2026 - avance diario usa mes cerrado cuando calendario ya avanzo: en renderGaugesDiario(), "Cumplimiento por fábrica - AVANCE DIARIO" comparaba siempre curMes (el último mes con datos) contra "ayer" según la fecha real del sistema. Si el calendario ya había avanzado a un mes nuevo sin datos todavía (ej: hoy 03/08/2026, último mes con filas = julio), diaCorte quedaba en 0 y las tarjetas mostraban 0% como si estuvieran esperando datos del mes nuevo, en vez de mostrar julio con su avance real. Ahora se calcula mesHoyKey (mes calendario real) y, si curMes ya no coincide con él, se trata como mes CERRADO: diaCorte pasa a ser el último día de ese mes, por lo que diasLaborales = diasLaboralesMes y la tarjeta compara el mes completo (igual criterio que "Cumplimiento por fábrica - MENSUAL"). El texto de la nota (gaugesNoteDiario) también distingue este caso: "<Mes> completo · N días hábiles" en vez de "sin días hábiles transcurridos aún". Sin cambios en "Cumplimiento por fábrica - MENSUAL" (ya funcionaba como se esperaba) ni en ningún otro criterio de filtro. Pedido 03/08/2026. -->
+<!-- - breve descripcion de lo hecho: se corrigió que la sección "Cumplimiento por fábrica - AVANCE DIARIO" quedara en 0% cuando el calendario real ya había avanzado a un mes sin datos todavía cargados (agosto), en vez de mostrar el avance real del último mes con datos (julio); ahora, cuando el último mes con datos no coincide con el mes calendario actual, se trata como mes cerrado y se muestra su avance completo. -->
+

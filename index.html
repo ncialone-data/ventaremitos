@@ -301,6 +301,15 @@ svg{display:block;width:100%;overflow:visible}
 
 <div class="card" style="margin-bottom:14px">
   <div class="c-head" style="margin-bottom:10px">
+    <span class="c-title">Notas de Crédito / Débito</span>
+    <span class="c-note" id="ndcNote">actualizá los datos para cargar</span>
+  </div>
+  <div class="kpis" id="kpisNdc" style="grid-template-columns:repeat(2,1fr);margin-bottom:0"></div>
+  <div id="ndcDetalleWrap"></div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="c-head" style="margin-bottom:10px">
     <span class="c-title">Pedidos pendientes de facturar</span>
     <span class="c-note" id="pendientesNote">actualizá los datos para cargar</span>
   </div>
@@ -534,6 +543,11 @@ const REMS_RAW=[];  // comprobantes únicos: {comp,estado,mes,emp}
 const AYER_DATA=[];  // filas del último día con datos {prod,rawcli,ejec,vta,cos,util,pct}
 const CLI_AGG={};  // acumulado por cliente: {name,vta,cos,prods:{prodName:{vta,cos}}}
 const EJEC_ROWS=[];  // filas activas para seguimiento comerciales: {mes,rawcli,emp,rub,vta}
+const NDC_MES_AGG={};  // { mes: { emp: {ncrTotal,ncrCount,ndbTotal,ndbCount} } } — ver processNdcRows()
+const NDC_DETAIL={ncr:[],ndb:[]};  // detalle por nota individual (deduplicada) para las tablas desplegables
+let ndcActiveCard=null;   // 'ncr' | 'ndb' | null — tarjeta de NDC con el detalle desplegado
+let ndcSortCol='importe'; // columna activa de orden en la tabla de detalle NDC
+let ndcSortDir='desc';    // 'asc' | 'desc'
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
@@ -554,7 +568,16 @@ function render(){
   const Rfirm=R.filter(d=>ACTIVOS.includes(d.e));
   const totalVta=Rfirm.reduce((s,d)=>s+d.v,0);
   const totalCos=Rfirm.reduce((s,d)=>s+d.o,0);
-  const margenAvg=totalVta>0?(totalVta-totalCos)/totalVta*100:0;
+  // Venta NETA de NDC (Notas de Crédito/Débito) — pedido 04/08/2026: la venta bruta de
+  // remitos no contempla las notas de crédito/débito generadas para esos remitos. Se suma
+  // el neto de NDC (créditos negativos + débitos positivos) del/los mes(es) visibles,
+  // respetando empGrupoFilter/empFilter (NO respeta rubFilter: la solapa NDC no tiene
+  // columna RUBRO — ver ndcNetForMonth()). El costo NO se ajusta (no hay una NDC de costo
+  // en el sheet), por lo que el margen bruto también baja si el neto de NDC es negativo.
+  const _mesesScopeVenta=mesFilter?[mesFilter]:MESES;
+  const ndcAdjVenta=_mesesScopeVenta.reduce((s,m)=>s+ndcNetForMonth(m).net,0);
+  const totalVtaNeto=totalVta+ndcAdjVenta;
+  const margenAvg=totalVtaNeto>0?(totalVtaNeto-totalCos)/totalVtaNeto*100:0;
   const clientes=new Set(
     REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)
       &&(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
@@ -583,7 +606,10 @@ function render(){
   // ── Objetivo mensual ──────────────────────────────────────────────────
   const OBJ=2500000000;
   const objMesKey=mesFilter||MESES[MESES.length-1];
-  const objMesVta=mesFilter?totalVta:DATA.filter(d=>d.m===objMesKey&&ACTIVOS.includes(d.e)).reduce((s,d)=>s+d.v,0);
+  // Objetivo mensual también neteado de NDC (misma lógica que totalVtaNeto arriba). Cuando
+  // no hay mes seleccionado, este cálculo YA ignoraba empFilter/rubFilter (comportamiento
+  // previo sin cambios), así que el ajuste de NDC también se calcula sin filtros (ignoreFilters).
+  const objMesVta=mesFilter?totalVtaNeto:(DATA.filter(d=>d.m===objMesKey&&ACTIVOS.includes(d.e)).reduce((s,d)=>s+d.v,0)+ndcNetForMonth(objMesKey,{ignoreFilters:true}).net);
   const objPct=Math.min(objMesVta/OBJ*100,100);
   const objRestante=Math.max(OBJ-objMesVta,0);
   const getObjColor=p=>{
@@ -634,18 +660,48 @@ function render(){
   // ── Render ────────────────────────────────────────────────────────────
   document.getElementById('kpis').innerHTML=
     `<div class="kpi acc"><div class="k-lbl">Venta activa</div>
-      <div class="k-val full">${fmtFull(totalVta)}</div>
-      <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito</div></div>`+
+      <div class="k-val full">${fmtFull(totalVtaNeto)}</div>
+      <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito · neto NDC ${ndcAdjVenta?fmtM(ndcAdjVenta):'$0'}</div></div>`+
     objCard+momCard+
     `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
       <div class="k-val">${fmtPct(margenAvg)}</div>
-      <div class="k-sub">$${fmtM(totalVta-totalCos)} neto</div></div>
+      <div class="k-sub">$${fmtM(totalVtaNeto-totalCos)} neto</div></div>
     <div class="kpi"><div class="k-lbl">Clientes únicos</div>
       <div class="k-val">${clientes.toLocaleString('es-AR')}</div>
       <div class="k-sub">en remitos activos</div></div>
     <div class="kpi"><div class="k-lbl">Clientes nuevos</div>
       <div class="k-val" style="color:var(--teal)">${clientesNuevos!==null?clientesNuevos.toLocaleString('es-AR'):'—'}</div>
       <div class="k-sub">${clientesNuevos!==null?'sin historial previo':'seleccioná un mes'}</div></div>`;
+  // ── Tarjetas NDC (Notas de Crédito / Notas de Débito) — pedido 04/08/2026 ─────────────
+  // Muestran cantidad + importe total del mes visible, con el mismo scope de empresa que
+  // el resto del dashboard. skipRubroSafety:true porque estas tarjetas son informativas
+  // (no netean venta) y deben mostrar dato aunque haya un rubro filtrado.
+  const ndcMesKey=mesFilter||MESES[MESES.length-1];
+  const ndcCardTot=ndcNetForMonth(ndcMesKey,{skipRubroSafety:true});
+  const ndcScopeTxt=(empFilter||'todas las empresas')+(rubFilter?' · no se filtra por rubro (la solapa NDC no tiene rubro)':'');
+  const ndcNoteEl=document.getElementById('ndcNote');
+  if(ndcNoteEl)ndcNoteEl.textContent=`${(ndcCardTot.ncrCount+ndcCardTot.ndbCount).toLocaleString('es-AR')} notas · ${MLBL[ndcMesKey]||ndcMesKey}`;
+  const kpisNdcEl=document.getElementById('kpisNdc');
+  if(kpisNdcEl){
+    // Importe COMPLETO (fmtFull), no abreviado — pedido 04/08/2026: las tarjetas de totales
+    // en $ siempre muestran el número completo salvo que se pida explícitamente abreviado.
+    kpisNdcEl.innerHTML=
+      `<div class="kpi pend-clickable" data-card="ncr"><div class="k-lbl">Notas de Crédito · ${MLBL[ndcMesKey]||ndcMesKey}</div>
+        <div class="k-val full" style="color:#f87171">${fmtFull(Math.abs(ndcCardTot.ncrTotal))}</div>
+        <div class="k-sub">${ndcCardTot.ncrCount.toLocaleString('es-AR')} notas · ${ndcScopeTxt}</div></div>
+      <div class="kpi pend-clickable" data-card="ndb"><div class="k-lbl">Notas de Débito · ${MLBL[ndcMesKey]||ndcMesKey}</div>
+        <div class="k-val full" style="color:#4ade80">${fmtFull(ndcCardTot.ndbTotal)}</div>
+        <div class="k-sub">${ndcCardTot.ndbCount.toLocaleString('es-AR')} notas · ${ndcScopeTxt}</div></div>`;
+    kpisNdcEl.querySelectorAll('.kpi').forEach(el=>{
+      el.classList.toggle('pend-card-on', el.dataset.card===ndcActiveCard);
+      el.onclick=()=>{
+        ndcActiveCard=(ndcActiveCard===el.dataset.card)?null:el.dataset.card;
+        kpisNdcEl.querySelectorAll('.kpi').forEach(x=>x.classList.toggle('pend-card-on', x.dataset.card===ndcActiveCard));
+        renderNdcDetalle(ndcMesKey);
+      };
+    });
+  }
+  renderNdcDetalle(ndcMesKey);
   renderRanking(Rfirm);
   renderMonth(rowsNoMes().filter(d=>ACTIVOS.includes(d.e)));
   renderClientes(Rfirm,totalVta);
@@ -683,8 +739,9 @@ function renderRanking(R){
 }
 
 function renderMonth(R){
-  document.getElementById('evNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto';
-  const byM=MESES.map(m=>R.filter(d=>d.m===m).reduce((s,d)=>s+d.v,0));
+  document.getElementById('evNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto'+(rubFilter?'':' · neto NDC');
+  // Neto de NDC sumado por mes (ver ndcNetForMonth) — se anula sola si hay rubFilter activo.
+  const byM=MESES.map(m=>R.filter(d=>d.m===m).reduce((s,d)=>s+d.v,0)+ndcNetForMonth(m).net);
   const max=Math.max(...byM.map(Math.abs),1);
   const W=520,H=240,padL=18,padR=14,padB=34,padT=18;
   const iw=W-padL-padR,ih=H-padT-padB,n=MESES.length,bw=iw/n*0.5,gap=iw/n;
@@ -758,11 +815,12 @@ function renderProductos(){
 function renderMargen(R){
   const byM=MESES.map(m=>{
     const mrs=R.filter(d=>d.m===m);
-    const vta=mrs.reduce((s,d)=>s+d.v,0);
+    // Venta neta de NDC (ver ndcNetForMonth) — el costo no se ajusta, no hay contrapartida.
+    const vta=mrs.reduce((s,d)=>s+d.v,0)+ndcNetForMonth(m).net;
     const cos=mrs.reduce((s,d)=>s+d.o,0);
     return vta>0?{v:(vta-cos)/vta*100,vta,cos}:null;
   });
-  document.getElementById('mrgNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto';
+  document.getElementById('mrgNote').textContent=(empFilter||'todas')+' · Firmada+Ingresada+Reparto'+(rubFilter?'':' · neto NDC');
   const vals=byM.filter(Boolean).map(b=>b.v);
   if(!vals.length){document.getElementById('margenChart').innerHTML='';return;}
   const minV=Math.min(...vals,0),maxV=Math.max(...vals,100);
@@ -1356,6 +1414,223 @@ function getOrigVtaHastaDia(orig, mes, diaMax){
   return Object.entries(byDay).filter(([d])=>+d<=diaMax).reduce((s,[,v])=>s+v,0);
 }
 
+// ============================================================================
+// NDC — Notas de Crédito y Débito (solapa nueva, pedido 04/08/2026)
+// ============================================================================
+// La solapa NDC (gid=1229588367) trae un registro por cada línea de PRODUCTO de cada
+// REMITO, enriquecido con la FACTURA y las notas de crédito/débito vinculadas a esa
+// factura. Un mismo REMITO puede repetirse varias veces: una vez por cada producto, y si
+// tiene más de una NCR o NDB asociada, esas filas se duplican una vez por cada nota (se
+// vieron casos reales con 2 NCR distintas sobre el mismo remito, cada una repetida en las 4
+// líneas de producto de ese remito). Por eso es imprescindible deduplicar por ID_NCR/ID_DB
+// antes de sumar NETO NCR/NETO NDB — si no, el importe de cada nota se contaría una vez por
+// cada línea de producto del remito al que está vinculada.
+// Columnas (fijas, confirmadas contra datos reales): EMPRESA,REMITO,FECHA REMITO,CLIENTE,
+//   ESTADO,PRODUCTO,CANTIDAD,NETO REMITO,ID_FAC,FACTURA,FECHA FACTURA,NETO FACTURA,ID_NCR,
+//   NOTA DE CREDITO,FECHA NCR,NETO NCR,ID_DB,NOTA DE DEBITO,FECHA NDB,NETO NDB
+// Atribución de mes: SIEMPRE el mes de FECHA REMITO (el remito original), NUNCA el mes en
+// que se emitió la nota — confirmado con el usuario 04/08/2026 (puede haber remitos de fin
+// de mes con NCR/NDB recién emitida al mes siguiente).
+// Signos: NETO NCR viene NEGATIVO (resta venta) y NETO NDB viene POSITIVO (suma venta) tal
+// cual en el sheet — ejemplo real visto: remito con NCR de -1.100.000 y luego una NDB de
+// +1.100.000 que la anula por completo.
+// No se filtra por ESTADO del remito: solo importa si la fila tiene ID_NCR o ID_DB no
+// vacío (una nota solo existe si el remito ya fue facturado).
+// Alcance: por pedido del usuario (04/08/2026) el neto de NDC se descuenta EN TODO EL
+// DASHBOARD — tanto en los KPIs de arriba (Venta activa/Objetivo/Margen, que excluyen
+// Tránsito) como en los gauges "Cumplimiento por fábrica" (mensual y diario) y en
+// "Seguimiento comerciales" (que sí incluyen Tránsito). Atribución por fábrica: como el
+// importe de la NCR/NDB es a nivel REMITO (no por línea de producto), se asume que todos
+// los productos de un mismo remito pertenecen a la misma fábrica en la práctica (es una
+// entrega física única) y se usa el origen resuelto a partir de CUALQUIER línea de ese
+// remito — supuesto razonable pero NO verificado con el usuario, ver receta de
+// continuidad. Atribución por comercial: se resuelve por CLIENTE vía CLIENT_LOOKUP, igual
+// que el resto del dashboard (sin ambigüedad, es un dato a nivel remito).
+// Limitación conocida: la solapa NDC no tiene columna RUBRO. Cuando hay un rubro
+// filtrado (rubFilter activo), NO se aplica ningún ajuste de NDC en los KPIs de arriba (se
+// muestra la venta bruta sin descuento) en vez de descontar el total del mes sobre una
+// porción filtrada de forma incorrecta — ver ndcNetForMonth().
+// Parsea una fecha "dd/mm/yyyy" (con o sin punto final, formato propio de la solapa NDC) a
+// un objeto Date. Devuelve null si no matchea el formato esperado.
+function parseFechaNdc(fechaRaw){
+  const fs=String(fechaRaw||'').trim().replace(/\.+$/,'');
+  const p=fs.split('/');
+  if(p.length<3) return null;
+  const y=parseInt(p[2].length===4?p[2]:`20${p[2]}`);
+  const mo=parseInt(p[1]); const d=parseInt(p[0]);
+  if(!y||!mo||!d) return null;
+  return new Date(y, mo-1, d);
+}
+
+function processNdcRows(rawRows){
+  for(const k in NDC_MES_AGG) delete NDC_MES_AGG[k];
+  NDC_DETAIL.ncr.length=0; NDC_DETAIL.ndb.length=0;
+  const EL_NDC={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
+  const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;}; // AR
+  const seenNcr=new Set(), seenDb=new Set();
+  let ncrRows=0, ndbRows=0, excluidasRows=0;
+  for(const r of rawRows){
+    // FECHA REMITO viene con un punto final (ej: "01/07/2026."), a diferencia de la solapa
+    // principal — se lo quita antes de parsear dd/mm/yyyy.
+    const fechaRaw=String(r['FECHA REMITO']||'').trim().replace(/\.+$/,'');
+    const p=fechaRaw.split('/');
+    if(p.length<3) continue;
+    const y=p[2].length===4?p[2]:`20${p[2]}`;
+    const mo=p[1].padStart(2,'0');
+    const mes=`${y}-${mo}`;
+    const dia=parseInt(p[0])||1;
+    const idNcr=String(r['ID_NCR']||'').trim();
+    const idDb=String(r['ID_DB']||'').trim();
+    if(!idNcr && !idDb) continue; // línea sin ninguna nota vinculada
+    const emp=EL_NDC[String(r['EMPRESA']||'').trim()]||String(r['EMPRESA']||'').trim();
+    const cliRaw=String(r['CLIENTE']||'').trim();
+    // Fábrica/origen, misma lógica que processRawRows (incluido el override de manteles)
+    const _prodNombre=String(r['PRODUCTO']||'').trim();
+    const _pcode=_prodNombre.split(/\s+/)[0].toUpperCase();
+    let _origRaw=PROD_LOOKUP[_pcode]||'TERCEROS';
+    if(/MANTEL/i.test(_prodNombre)) _origRaw='GRAFICA';
+    const origen=(_origRaw==='PROPIO')?null:_origRaw;
+    const _ensureMes=()=>{ if(!NDC_MES_AGG[mes]) NDC_MES_AGG[mes]={}; if(!NDC_MES_AGG[mes][emp]) NDC_MES_AGG[mes][emp]={ncrTotal:0,ncrCount:0,ndbTotal:0,ndbCount:0}; };
+    const _applyOrig=(monto)=>{
+      if(!origen) return;
+      if(!ORIG_AGG[origen]) ORIG_AGG[origen]={}; if(!ORIG_AGG[origen][mes]) ORIG_AGG[origen][mes]={};
+      ORIG_AGG[origen][mes][emp]=(ORIG_AGG[origen][mes][emp]||0)+monto;
+      if(!ORIG_DAYAGG[origen]) ORIG_DAYAGG[origen]={}; if(!ORIG_DAYAGG[origen][mes]) ORIG_DAYAGG[origen][mes]={};
+      ORIG_DAYAGG[origen][mes][dia]=(ORIG_DAYAGG[origen][mes][dia]||0)+monto;
+    };
+    if(idNcr && !seenNcr.has(idNcr)){
+      seenNcr.add(idNcr);
+      // Exclusión NCR(D) — pedido 04/08/2026 (confirmado con el usuario, multiple choice):
+      // toda nota cuyo texto de NOTA DE CREDITO empiece con "NCR(D)" (ej: "NCR(D) A
+      // 0007-00014891") se excluye COMPLETAMENTE — no suma a ningún total/gauge/comercial
+      // ni aparece en la tabla de detalle. Solo aplica a Notas de Crédito (NCR), no a
+      // Notas de Débito (si apareciera alguna vez "NDB(D)", NO se excluye con esta regla).
+      // Match estricto de PREFIJO (no alcanza con que "(D)" aparezca en cualquier parte).
+      const notaCredTxt=String(r['NOTA DE CREDITO']||'').trim();
+      const esNcrD=/^NCR\(D\)/i.test(notaCredTxt);
+      if(esNcrD){
+        excluidasRows++;
+      } else {
+        const monto=_n(r['NETO NCR']); // ya viene negativo
+        _ensureMes();
+        NDC_MES_AGG[mes][emp].ncrTotal+=monto; NDC_MES_AGG[mes][emp].ncrCount++;
+        _applyOrig(monto);
+        EJEC_ROWS.push({mes,rawcli:cliRaw,emp,rub:null,vta:monto,cos:0,estado:'NDC'});
+        // FECHA de la tabla de detalle = fecha de EMISIÓN de la nota (FECHA NCR), no la del
+        // remito original — pedido 04/08/2026 (confirmado con el usuario, multiple choice).
+        NDC_DETAIL.ncr.push({numero:notaCredTxt||idNcr, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NCR']), importe:monto, mes, emp});
+        ncrRows++;
+      }
+    }
+    if(idDb && !seenDb.has(idDb)){
+      seenDb.add(idDb);
+      const monto=_n(r['NETO NDB']); // ya viene positivo
+      _ensureMes();
+      NDC_MES_AGG[mes][emp].ndbTotal+=monto; NDC_MES_AGG[mes][emp].ndbCount++;
+      _applyOrig(monto);
+      EJEC_ROWS.push({mes,rawcli:cliRaw,emp,rub:null,vta:monto,cos:0,estado:'NDC'});
+      NDC_DETAIL.ndb.push({numero:String(r['NOTA DE DEBITO']||'').trim()||idDb, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NDB']), importe:monto, mes, emp});
+      ndbRows++;
+    }
+  }
+  console.log(`NDC: ${ncrRows} notas de crédito y ${ndbRows} notas de débito procesadas (deduplicadas por ID_NCR/ID_DB); ${excluidasRows} NCR(D) excluidas.`);
+}
+
+// Neto de NDC (créditos + débitos) de un mes puntual, respetando empGrupoFilter/empFilter.
+// opts.ignoreFilters=true → ignora TODOS los filtros (para el "Objetivo mensual" sin mes
+// seleccionado, que ya hoy se calcula sin filtro de empresa/rubro).
+// opts.skipRubroSafety=true → para las tarjetas informativas de NDC (no netean venta, solo
+// informan cantidad/importe), que sí deben mostrar dato aunque haya un rubro filtrado.
+function ndcNetForMonth(mes, opts){
+  opts=opts||{};
+  const zero={net:0,ncrTotal:0,ncrCount:0,ndbTotal:0,ndbCount:0};
+  const byEmp=NDC_MES_AGG[mes];
+  if(!byEmp) return zero;
+  // La solapa NDC no tiene columna RUBRO: si hay un rubro filtrado no se puede saber qué
+  // parte de cada nota corresponde a ese rubro puntual, así que no se aplica ningún ajuste
+  // de venta (se ve la venta bruta, sin descuento) — salvo para las tarjetas informativas.
+  if(!opts.ignoreFilters && rubFilter && !opts.skipRubroSafety) return zero;
+  let entries=Object.entries(byEmp);
+  if(!opts.ignoreFilters){
+    if(empGrupoFilter){ const _c=new Set(EMP_GRUPOS[empGrupoFilter]||[]); entries=entries.filter(([e])=>_c.has(e)); }
+    if(empFilter){ entries=entries.filter(([e])=>e===empFilter); }
+  }
+  return entries.reduce((acc,[,v])=>({
+    net:acc.net+v.ncrTotal+v.ndbTotal,
+    ncrTotal:acc.ncrTotal+v.ncrTotal, ncrCount:acc.ncrCount+v.ncrCount,
+    ndbTotal:acc.ndbTotal+v.ndbTotal, ndbCount:acc.ndbCount+v.ndbCount
+  }), {...zero});
+}
+
+// Tabla de detalle desplegable de las tarjetas NDC (Notas de Crédito / Notas de Débito) —
+// mismo patrón de interacción que "Pedidos pendientes de facturar" (togglePendDetalle /
+// renderPendientesDetalle): una sola tabla a la vez, clic en la misma tarjeta la cierra,
+// clic en la otra la reemplaza — confirmado con el usuario 04/08/2026.
+// Decisiones confirmadas con el usuario (multiple choice, 04/08/2026):
+//   - IMPORTE DE NDC se muestra siempre en positivo (magnitud), igual que la tarjeta resumen,
+//     para que "mayor a menor" sea intuitivo sin importar si es crédito o débito.
+//   - FECHA muestra la fecha de EMISIÓN de la nota (FECHA NCR/FECHA NDB), no la del remito
+//     original (que sí se sigue usando para decidir a qué MES se le descuenta, sin cambios).
+function renderNdcDetalle(ndcMesKey){
+  const wrap=document.getElementById('ndcDetalleWrap');
+  if(!wrap) return;
+  if(!ndcActiveCard){ wrap.innerHTML=''; return; }
+  const list=ndcActiveCard==='ncr'?NDC_DETAIL.ncr:NDC_DETAIL.ndb;
+  const titulo=ndcActiveCard==='ncr'?'Notas de Crédito':'Notas de Débito';
+  // Mismo scope que la tarjeta resumen: el mes visible (ndcMesKey) + empGrupoFilter/empFilter.
+  // NO se filtra por rubFilter (la solapa NDC no tiene columna RUBRO), igual que en las
+  // tarjetas (skipRubroSafety).
+  let rows=list.filter(d=>d.mes===ndcMesKey
+    &&(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp))
+    &&(!empFilter||d.emp===empFilter));
+  if(!rows.length){ wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--mut)">Sin ${titulo.toLowerCase()} en ${MLBL[ndcMesKey]||ndcMesKey}</div>`; return; }
+  const sorters={
+    numero:(a,b)=>String(a.numero).localeCompare(String(b.numero),'es'),
+    cliente:(a,b)=>String(a.cliente||'').localeCompare(String(b.cliente||''),'es'),
+    fecha:(a,b)=>(a.fecha?a.fecha.getTime():0)-(b.fecha?b.fecha.getTime():0),
+    importe:(a,b)=>Math.abs(a.importe)-Math.abs(b.importe)
+  };
+  const cmp=sorters[ndcSortCol]||sorters.importe;
+  rows=rows.slice().sort((a,b)=>ndcSortDir==='asc'?cmp(a,b):-cmp(a,b));
+  const mn2=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const arrow=col=>ndcSortCol===col?(ndcSortDir==='asc'?' ▲':' ▼'):'';
+  const thCol=col=>ndcSortCol===col?'var(--acc)':'var(--tx)';
+  const cols=[
+    {key:'numero',  label:'NRO NDC',        w:'26%', align:'left'},
+    {key:'cliente', label:'CLIENTE',        w:'34%', align:'left'},
+    {key:'fecha',   label:'FECHA',          w:'16%', align:'center'},
+    {key:'importe', label:'IMPORTE DE NDC', w:'24%', align:'right'}
+  ];
+  wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">${titulo} · ${MLBL[ndcMesKey]||ndcMesKey} · ${rows.length.toLocaleString('es-AR')} notas</div>
+    <div style="max-height:340px;overflow-y:auto">
+      <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+        <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
+        <thead><tr style="border-bottom:1px solid var(--line2)">
+          ${cols.map(c=>`<th data-col="${c.key}" style="padding:5px 8px;text-align:${c.align};font-weight:600;cursor:pointer;user-select:none;color:${thCol(c.key)}">${c.label}${arrow(c.key)}</th>`).join('')}
+        </tr></thead>
+        <tbody>${rows.map(d=>{
+          const fechaStr=d.fecha?`${d.fecha.getDate()} ${mn2[d.fecha.getMonth()]} ${d.fecha.getFullYear()}`:'—';
+          return `<tr style="border-bottom:1px solid var(--line)">
+            <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.numero}</td>
+            <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.cliente||'—'}</td>
+            <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${fechaStr}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(Math.abs(d.importe))}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>
+  </div>`;
+  wrap.querySelectorAll('th[data-col]').forEach(th=>{
+    th.onclick=()=>{
+      const col=th.dataset.col;
+      if(ndcSortCol===col){ ndcSortDir=ndcSortDir==='asc'?'desc':'asc'; }
+      else { ndcSortCol=col; ndcSortDir='desc'; }
+      renderNdcDetalle(ndcMesKey);
+    };
+  });
+}
+
 // Cuenta días hábiles (lunes a sábado, excluye domingo) del 1 al día indicado (inclusive)
 function countWorkingDaysUntil(year, monthIndex0, dayMax){
   let count=0;
@@ -1758,16 +2033,23 @@ document.getElementById('sheetsBtn').addEventListener('click', async function(){
   const urlPend = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1646279255&single=true&output=csv`;
   const urlProd = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1314968626&single=true&output=csv`;
 const urlCli  = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1839604516&single=true&output=csv`;
+  // NDC (Notas de Crédito/Débito) — solapa nueva, pedido 04/08/2026. Tolerante a fallos
+  // (igual que urlCli): si todavía no se reinició "Publicar en la web" con esta solapa
+  // incluida, el dashboard sigue funcionando igual que antes, sin ningún ajuste de NDC.
+  const urlNdc  = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1229588367&single=true&output=csv`;
   try {
-    const [resRem, resPend, resProd, resCli] = await Promise.all([fetch(urlRem), fetch(urlPend), fetch(urlProd), fetch(urlCli).catch(()=>({ok:false,text:()=>''}))]);
+    const [resRem, resPend, resProd, resCli, resNdc] = await Promise.all([fetch(urlRem), fetch(urlPend), fetch(urlProd), fetch(urlCli).catch(()=>({ok:false,text:()=>''})), fetch(urlNdc).catch(()=>({ok:false,text:()=>''}))]);
     if(!resRem.ok) throw new Error(`HTTP ${resRem.status}`);
-    const [textRem, textPend, textProd, textCli] = await Promise.all([resRem.text(), resPend.text(), resProd.text(), resCli.ok?resCli.text():Promise.resolve('')]);
+    const [textRem, textPend, textProd, textCli, textNdc] = await Promise.all([resRem.text(), resPend.text(), resProd.text(), resCli.ok?resCli.text():Promise.resolve(''), resNdc.ok?resNdc.text():Promise.resolve('')]);
     // Construir lookup de productos PRIMERO (para enriquecer remitos)
     if(resProd.ok&&textProd){const rowsProd=parseCsvText(textProd);if(rowsProd.length>0)processProductRows(rowsProd);}
     if(textCli){const rowsCli=parseCsvText(textCli);if(rowsCli.length>0)processClientRows(rowsCli);}
     const rowsRem = parseCsvText(textRem);
     if(rowsRem.length===0) throw new Error('El sheet no devolvió datos');
     processRawRows(rowsRem, 'Google Sheets');
+    // processNdcRows() debe correr DESPUÉS de processRawRows (que resetea ORIG_AGG/
+    // ORIG_DAYAGG/EJEC_ROWS al principio) para que el neteo de NDC no se pierda.
+    if(textNdc){const rowsNdc=parseCsvText(textNdc);if(rowsNdc.length>0)processNdcRows(rowsNdc);}
     if(resPend.ok){const rowsPend=parseCsvText(textPend);if(rowsPend.length>0)processPendientesRows(rowsPend);}
   } catch(err) {
     status.textContent = `⚠ Error al conectar: ${err.message}`;
@@ -1951,4 +2233,16 @@ function renderUtilidadClientes(){
 <!-- 78 - Dashboard ventas REM 2026 - orden por dias en detalle pendientes comercial: se cambia el orden por defecto de los pedidos dentro de cada comercial desplegado en "Pendientes por comercial", de importe descendente a DÍAS descendente (el pedido con mas dias pendiente aparece primero). Cambio puntual en renderPendientesPorComercial(): arr.sort ahora compara por p.dias en vez de p.total. -->
 <!-- 88 - Dashboard ventas REM 2026 - avance diario usa mes cerrado cuando calendario ya avanzo: en renderGaugesDiario(), "Cumplimiento por fábrica - AVANCE DIARIO" comparaba siempre curMes (el último mes con datos) contra "ayer" según la fecha real del sistema. Si el calendario ya había avanzado a un mes nuevo sin datos todavía (ej: hoy 03/08/2026, último mes con filas = julio), diaCorte quedaba en 0 y las tarjetas mostraban 0% como si estuvieran esperando datos del mes nuevo, en vez de mostrar julio con su avance real. Ahora se calcula mesHoyKey (mes calendario real) y, si curMes ya no coincide con él, se trata como mes CERRADO: diaCorte pasa a ser el último día de ese mes, por lo que diasLaborales = diasLaboralesMes y la tarjeta compara el mes completo (igual criterio que "Cumplimiento por fábrica - MENSUAL"). El texto de la nota (gaugesNoteDiario) también distingue este caso: "<Mes> completo · N días hábiles" en vez de "sin días hábiles transcurridos aún". Sin cambios en "Cumplimiento por fábrica - MENSUAL" (ya funcionaba como se esperaba) ni en ningún otro criterio de filtro. Pedido 03/08/2026. -->
 <!-- - breve descripcion de lo hecho: se corrigió que la sección "Cumplimiento por fábrica - AVANCE DIARIO" quedara en 0% cuando el calendario real ya había avanzado a un mes sin datos todavía cargados (agosto), en vez de mostrar el avance real del último mes con datos (julio); ahora, cuando el último mes con datos no coincide con el mes calendario actual, se trata como mes cerrado y se muestra su avance completo. -->
+<!-- 89 - Dashboard ventas REM 2026 - venta neta descontando NDCs y tarjetas notas credito debito: se incorpora una quinta solapa del Google Sheets (NDC, gid=1229588367) con la vinculación remito→factura→notas de crédito/débito, y se descuenta ese neto de la venta bruta en todo el dashboard. Nueva función processNdcRows() (corre después de processRawRows): dedupe por ID_NCR/ID_DB (un remito puede repetir la misma nota una vez por cada línea de producto), atribuye cada nota al MES de FECHA REMITO (no al mes de emisión de la nota, confirmado con el usuario), y acumula NDC_MES_AGG[mes][emp]. NETO NCR ya viene negativo y NETO NDB ya viene positivo en el sheet. Nueva función ndcNetForMonth(mes,opts) centraliza el neteo respetando empGrupoFilter/empFilter; si hay rubFilter activo NO aplica ningún ajuste (la solapa NDC no tiene columna RUBRO) salvo para las tarjetas informativas (skipRubroSafety). Alcance del descuento (pedido explícito del usuario, "a todo el dashboard"): "Venta activa"/"Objetivo mensual"/"Margen bruto" (render(), vía totalVtaNeto), "Evolución mensual" y "Evolución del margen bruto" (renderMonth/renderMargen, por mes), los gauges "Cumplimiento por fábrica" mensual y diario (ORIG_AGG/ORIG_DAYAGG, mutados directamente dentro de processNdcRows atribuyendo fábrica/día igual que processRawRows) y "Seguimiento comerciales" (se inyectan filas sintéticas con estado:'NDC' en EJEC_ROWS, rub:null para que se excluyan solas si hay rubFilter activo; "Remitos por comercial" no se toca porque solo cuenta remitos con estado==='Firmada'). Clientes únicos/nuevos y la curva "vs. mes anterior" (DAYAGG) NO se tocan en este archivo — ver receta 90 para el detalle de qué quedó pendiente. Se agregan dos tarjetas nuevas ("Notas de Crédito" y "Notas de Débito", cantidad + importe del mes visible) en un contenedor nuevo #kpisNdc debajo de los KPIs principales. Supuesto no verificado con el usuario: para atribuir cada NDC a una fábrica (ORIG_AGG), como el importe es a nivel remito (no por línea de producto), se asume que todos los productos de un mismo remito pertenecen a la misma fábrica y se usa el origen de cualquiera de sus líneas — ver receta 90. Pedido 04/08/2026. -->
+<!-- - breve descripcion de lo hecho: se agregó el descuento de Notas de Crédito/Débito (nueva solapa NDC del Sheets) sobre la venta bruta en los KPIs principales, en Evolución mensual/margen, en los gauges de Cumplimiento por fábrica (mensual y diario) y en Seguimiento comerciales, atribuyendo cada nota al mes del remito original; se agregaron dos tarjetas nuevas mostrando cantidad e importe de Notas de Crédito y de Débito del mes visible; quedan sin ajustar (documentado como pendiente) la curva "vs. mes anterior" y los conteos de clientes, y queda como supuesto no confirmado que todo un remito pertenece a una sola fábrica a efectos de repartir el descuento en los gauges por fábrica. -->
+<!-- 91 - Dashboard ventas REM 2026 - tarjetas NDC con importe completo y detalle desplegable ordenable: dos ajustes pedidos por el usuario sobre las tarjetas de NDC del archivo 89. (1) Formato de importe: las tarjetas "Notas de Crédito"/"Notas de Débito" pasan de fmtM (abreviado, ej "233 M") a fmtFull (número completo con separador de miles) — regla de formato nueva para recordar: toda tarjeta de TOTALES en $ debe mostrar el número completo salvo que se pida explícitamente abreviado. (2) Detalle desplegable: clic en cualquiera de las 2 tarjetas (ahora con class="kpi pend-clickable", mismo patrón que "Pedidos pendientes de facturar") despliega hacia abajo (#ndcDetalleWrap) una tabla con el detalle de esa NDC — columnas NRO NDC | CLIENTE | FECHA | IMPORTE DE NDC — ordenable ASC/DESC clickeando cada encabezado (misma mecánica que renderPendientesDetalle: th[data-col], flechas ▲▼, columna activa resaltada). Una sola tabla a la vez (clic en la otra tarjeta la reemplaza, clic en la misma la cierra) — confirmado con el usuario. Nueva estructura NDC_DETAIL={ncr:[],ndb:[]} poblada dentro de processNdcRows() con una entrada por NOTA individual ya deduplicada (mismo dedupe por ID_NCR/ID_DB que ya existía para los totales), guardando numero (texto de NOTA DE CREDITO/NOTA DE DEBITO), cliente, fecha (parseFechaNdc(), función nueva) e importe con signo original. Decisiones confirmadas con el usuario (multiple choice): IMPORTE DE NDC se muestra siempre en positivo/magnitud (igual que la tarjeta resumen, para que "mayor a menor" sea intuitivo sin importar si es crédito o débito — orden por defecto: importe desc); FECHA muestra la fecha de EMISIÓN de la nota (FECHA NCR/FECHA NDB) y NO la fecha del remito original (que se sigue usando, sin cambios, únicamente para decidir a qué MES se le descuenta esa NDC en el resto del dashboard — por eso una misma nota puede figurar en la tabla de julio con una FECHA de agosto, si el remito es de julio pero la nota se emitió recién en agosto). La tabla respeta el mismo scope que la tarjeta resumen (mes visible + empGrupoFilter/empFilter, sin filtrar por rubro). Pedido 04/08/2026. -->
+<!-- - breve descripcion de lo hecho: se cambiaron las tarjetas de Notas de Crédito/Débito para mostrar el importe completo en vez de abreviado (nueva regla de formato general para tarjetas de totales), y se agregó que al hacer clic en cualquiera de las 2 tarjetas se despliegue una tabla de detalle ordenable (NRO NDC, CLIENTE, FECHA de emisión de la nota, IMPORTE en positivo) con el mismo comportamiento de apertura única que "Pedidos pendientes de facturar". -->
+<!-- 92 - Dashboard ventas REM 2026 - tarjetas NDC dentro de card con header igual a pedidos pendientes: ajuste puramente visual, pedido por el usuario al ver que la sección de NDC (tarjetas + tabla de detalle) se veía distinta a "Pedidos pendientes de facturar". Causa: "Pedidos pendientes de facturar" está envuelta en un <div class="card"> (fondo, borde, padding, con su propio <div class="c-head"> de título+nota), mientras que #kpisNdc y #ndcDetalleWrap quedaban sueltos directo sobre el fondo de la página, sin ese panel contenedor — por eso la tabla de NDC se veía "flotando" en vez de quedar encuadrada como la de pendientes. Se envolvió #kpisNdc + #ndcDetalleWrap en el mismo <div class="card"> con su propio c-head ("Notas de Crédito / Débito" + nota #ndcNote con la cantidad total de notas del mes visible, mismo patrón que #pendientesNote). Sin cambios de lógica: mismos datos, mismo comportamiento de apertura/orden de la tabla, solo cambia el contenedor visual. Pedido 04/08/2026. -->
+<!-- - breve descripcion de lo hecho: se envolvieron las tarjetas de Notas de Crédito/Débito y su tabla de detalle dentro de un panel "card" con título y nota, igual que "Pedidos pendientes de facturar", para que ambas secciones se vean visualmente consistentes (antes la de NDC quedaba sin el panel contenedor y se veía distinta). -->
+<!-- 93 - Dashboard ventas REM 2026 - excluir NCR(D) de todos los calculos y del listado: en processNdcRows(), toda fila cuyo campo NOTA DE CREDITO empiece con el prefijo "NCR(D)" (ej: "NCR(D) A 0007-00014891", caso real de julio dado por el usuario) se excluye POR COMPLETO — no suma a NDC_MES_AGG (por lo tanto tampoco a totalVtaNeto/objMesVta/margenAvg ni a renderMonth/renderMargen), no se resta/suma en ORIG_AGG/ORIG_DAYAGG (gauges de fábrica), no se empuja a EJEC_ROWS (Seguimiento comerciales) y no aparece en NDC_DETAIL (tabla de detalle desplegable ni en la tarjeta resumen). Decisiones confirmadas con el usuario (multiple choice, 04/08/2026): (1) el criterio aplica SOLO a Notas de Crédito — si en el futuro apareciera una "NDB(D)" en NOTA DE DEBITO, NO se excluye con esta regla (quedaría pendiente pedirlo aparte si hiciera falta). (2) El match es un PREFIJO ESTRICTO (`/^NCR\(D\)/i`): solo se excluye si el texto empieza exactamente con "NCR(D)", no alcanza con que "(D)" aparezca en cualquier otra parte del texto — se probó explícitamente que un caso "FCR(D) A..." (prefijo distinto) NO se excluye con esta regla. Se agregó un contador nuevo (excluidasRows) al console.log de diagnóstico de processNdcRows() para poder verificar cuántas NCR(D) se excluyeron en cada carga de datos. Verificado con un test aislado en Node (dedupe, prefijo estricto, alcance solo-NC). Pedido 04/08/2026. -->
+<!-- - breve descripcion de lo hecho: se agregó una exclusión total (KPIs, gauges, comerciales y tabla de detalle) para cualquier Nota de Crédito cuyo texto empiece con el prefijo "NCR(D)", a pedido puntual del usuario sobre un caso real de julio; se confirmó que el criterio aplica solo a Notas de Crédito (no a Notas de Débito) y que el match debe ser de prefijo estricto, no de "(D)" en cualquier posición del texto. -->
+
+
+
+
 

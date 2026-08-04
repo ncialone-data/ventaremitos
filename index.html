@@ -661,7 +661,7 @@ function render(){
   document.getElementById('kpis').innerHTML=
     `<div class="kpi acc"><div class="k-lbl">Venta activa</div>
       <div class="k-val full">${fmtFull(totalVtaNeto)}</div>
-      <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito · neto NDC ${ndcAdjVenta?fmtM(ndcAdjVenta):'$0'}</div></div>`+
+      <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito · con NDCs</div></div>`+
     objCard+momCard+
     `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
       <div class="k-val">${fmtPct(margenAvg)}</div>
@@ -2241,6 +2241,9 @@ function renderUtilidadClientes(){
 <!-- - breve descripcion de lo hecho: se envolvieron las tarjetas de Notas de Crédito/Débito y su tabla de detalle dentro de un panel "card" con título y nota, igual que "Pedidos pendientes de facturar", para que ambas secciones se vean visualmente consistentes (antes la de NDC quedaba sin el panel contenedor y se veía distinta). -->
 <!-- 93 - Dashboard ventas REM 2026 - excluir NCR(D) de todos los calculos y del listado: en processNdcRows(), toda fila cuyo campo NOTA DE CREDITO empiece con el prefijo "NCR(D)" (ej: "NCR(D) A 0007-00014891", caso real de julio dado por el usuario) se excluye POR COMPLETO — no suma a NDC_MES_AGG (por lo tanto tampoco a totalVtaNeto/objMesVta/margenAvg ni a renderMonth/renderMargen), no se resta/suma en ORIG_AGG/ORIG_DAYAGG (gauges de fábrica), no se empuja a EJEC_ROWS (Seguimiento comerciales) y no aparece en NDC_DETAIL (tabla de detalle desplegable ni en la tarjeta resumen). Decisiones confirmadas con el usuario (multiple choice, 04/08/2026): (1) el criterio aplica SOLO a Notas de Crédito — si en el futuro apareciera una "NDB(D)" en NOTA DE DEBITO, NO se excluye con esta regla (quedaría pendiente pedirlo aparte si hiciera falta). (2) El match es un PREFIJO ESTRICTO (`/^NCR\(D\)/i`): solo se excluye si el texto empieza exactamente con "NCR(D)", no alcanza con que "(D)" aparezca en cualquier otra parte del texto — se probó explícitamente que un caso "FCR(D) A..." (prefijo distinto) NO se excluye con esta regla. Se agregó un contador nuevo (excluidasRows) al console.log de diagnóstico de processNdcRows() para poder verificar cuántas NCR(D) se excluyeron en cada carga de datos. Verificado con un test aislado en Node (dedupe, prefijo estricto, alcance solo-NC). Pedido 04/08/2026. -->
 <!-- - breve descripcion de lo hecho: se agregó una exclusión total (KPIs, gauges, comerciales y tabla de detalle) para cualquier Nota de Crédito cuyo texto empiece con el prefijo "NCR(D)", a pedido puntual del usuario sobre un caso real de julio; se confirmó que el criterio aplica solo a Notas de Crédito (no a Notas de Débito) y que el match debe ser de prefijo estricto, no de "(D)" en cualquier posición del texto. -->
+<!-- 94 - Dashboard ventas REM 2026 - subtitulo venta activa con NDCs sin importe: ajuste puntual de texto en la tarjeta "Venta activa". El k-sub mostraba "· neto NDC $X" (ej: "neto NDC -93,4 M"), y el usuario pidió sacar el importe y dejar solo la aclaración de que el total ya contempla las NDCs. Cambia de "sin Tránsito · neto NDC ${ndcAdjVenta?fmtM(ndcAdjVenta):'$0'}" a "sin Tránsito · con NDCs". Sin cambios de cálculo: totalVtaNeto sigue siendo exactamente el mismo (venta bruta sin Tránsito + neto de NDC, con la exclusión de NCR(D) del archivo 93); solo cambia el texto mostrado debajo del número. Pedido 04/08/2026. -->
+<!-- - breve descripcion de lo hecho: se cambió el subtítulo de la tarjeta "Venta activa" de "sin Tránsito · neto NDC $X" a "sin Tránsito · con NDCs", quitando el importe del ajuste y dejando solo la aclaración de que el total ya contempla las Notas de Crédito/Débito, sin tocar ningún cálculo. -->
+
 
 
 

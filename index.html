@@ -305,6 +305,7 @@ svg{display:block;width:100%;overflow:visible}
     <span class="c-note" id="ndcNote">actualizá los datos para cargar</span>
   </div>
   <div class="kpis" id="kpisNdc" style="grid-template-columns:repeat(2,1fr);margin-bottom:0"></div>
+  <div id="tipifWrap"></div>
   <div id="ndcDetalleWrap"></div>
 </div>
 
@@ -548,6 +549,8 @@ const NDC_DETAIL={ncr:[],ndb:[]};  // detalle por nota individual (deduplicada) 
 let ndcActiveCard=null;   // 'ncr' | 'ndb' | null — tarjeta de NDC con el detalle desplegado
 let ndcSortCol='importe'; // columna activa de orden en la tabla de detalle NDC
 let ndcSortDir='desc';    // 'asc' | 'desc'
+const TIPIF_BY_COMP={};   // comprobante (texto) -> {tipoCmp:'NCR'|'NDB', ...resultado de parsearObs()} — ver processTipifRows()
+let motivoActivo=null;    // motivo seleccionado en "Motivos resumen" (clic en una fila) — filtra "Lista detalle" a solo ese motivo; null = sin filtro
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
@@ -696,12 +699,15 @@ function render(){
       el.classList.toggle('pend-card-on', el.dataset.card===ndcActiveCard);
       el.onclick=()=>{
         ndcActiveCard=(ndcActiveCard===el.dataset.card)?null:el.dataset.card;
+        motivoActivo=null; // al abrir/cerrar/cambiar de tarjeta se limpia cualquier filtro de motivo previo
         kpisNdcEl.querySelectorAll('.kpi').forEach(x=>x.classList.toggle('pend-card-on', x.dataset.card===ndcActiveCard));
         renderNdcDetalle(ndcMesKey);
+        renderTipifBreakdown(ndcMesKey);
       };
     });
   }
   renderNdcDetalle(ndcMesKey);
+  renderTipifBreakdown(ndcMesKey);
   renderRanking(Rfirm);
   renderMonth(rowsNoMes().filter(d=>ACTIVOS.includes(d.e)));
   renderClientes(Rfirm,totalVta);
@@ -1536,6 +1542,330 @@ function processNdcRows(rawRows){
   console.log(`NDC: ${ncrRows} notas de crédito y ${ndbRows} notas de débito procesadas (deduplicadas por ID_NCR/ID_DB); ${excluidasRows} NCR(D) excluidas.`);
 }
 
+// ============================================================================
+// Tipificación de Notas de Crédito/Débito — solapa nueva (pedido 06/08/2026)
+// ============================================================================
+// Port fiel 1:1 del script "Tipificador de Notas de Credito.py" que el usuario usa
+// localmente para clasificar el campo OBS (observación libre del ERP) en MOTIVO/TIPO/
+// USUARIO CARGA/AUTORIZA/CALIDAD DE PARSEO. Validado 216/216 casos contra el script Python
+// original (misma bateria exhaustiva, cubre cada motivo/alias/autorizante/usuario/palabra
+// de inferencia). Mismos diccionarios y mismo orden de evaluación — para agregar un
+// motivo/alias/autorizante nuevo alcanza con tocar los diccionarios de abajo, igual que en
+// el Python.
+const MOTIVOS = {
+  DESC: "Descuentos", NVD: "Descuento comercial", CONTR: "Contrato",
+  DEVP: "Devolucion parcial", DEVT: "Devolucion total", EFAC: "Error de facturacion",
+  CANC: "Cancelado", OOSS: "Ajuste de cuenta", FALTP: "Faltante parcial",
+  FALT: "Faltante total", DIFP: "Diferencia de precio", ANUL: "Anulacion",
+};
+const ALIAS_MOTIVO = {
+  "DIF PRECIO": "DIFP", "DIFPRECIO": "DIFP", "DIPP": "DIFP", "DIFF": "DIFP", "DIF": "DIFP",
+  "FALP": "FALTP", "FALTA": "FALTP", "FAL": "FALTP",
+  "OSS": "OOSS", "OSSS": "OOSS", "OOSSS": "OOSS", "OSOS": "OOSS",
+  "DECT": "DEVT", "DET": "DEVT", "DEV T": "DEVT", "DEVTT": "DEVT",
+  "DEV P": "DEVP", "DEP": "DEVP",
+  "CENC": "CANC", "CACN": "CANC",
+  "EFCA": "EFAC", "EFACT": "EFAC", "EFC": "EFAC",
+};
+const MOTIVO_SEGUN_TIPO = { DEV: { P: "DEVP", T: "DEVT" } };
+const PRE_REEMPLAZOS = [
+  ["DIF DE PRECIO", "DIFP"], ["DIFERENCIA DE PRECIO", "DIFP"],
+  ["DIF DE PRECIOS", "DIFP"], ["ERROR DE FACTURACION", "EFAC"],
+];
+const FRASES_MOTIVO = [
+  ["CONTR", ["RELACIONADA AL CONTRATO", "RELACIONADA ALCONTRATO",
+             "RELACIONADA A CONTRATO", "RELACIONADO AL CONTRATO"]],
+];
+const TIPOS = { P: "Parcial", T: "Total" };
+const USUARIOS_CARGA = new Set(["GF", "CV", "RP", "MB", "CU"]);
+const ALIAS_USUARIO_CARGA = { RO: "RP" };
+const AUTORIZANTES = {
+  ADIAZ: [], CAGUILAR: [],
+  PPANZARAZA: ["PPANSARAZA", "PANZARAZA", "PPANZARAZZA", "PPENSARAZA", "PPANZARAZ", "PANSARAZA"],
+  PSOTILLI: ["PSOTILI", "SOTILLI"],
+  RPINTOS: ["PINTOS"],
+  LRODEIRO: ["RODEIRO"],
+  ESOSA: ["SOSA"],
+  VZUKI: ["ZUKI"],
+  CVELAZQUEZ: ["CVELEZQUEZ", "VELAZQUEZ"],
+  BTAMBORRO: ["TAMBORRO"],
+  DCORDOBA: [], AMOLINA: [],
+  LBORCHES: ["LBORHCES", "BORCHES"],
+  GODCASAR: ["GDOCASAR", "GODCASA", "GOCASAR"],
+  JORTEGA: ["ORTEGA"],
+  NTARTABINI: ["TARTABINI", "NTARTABINNI"],
+  YMOLINA: ["MOLINA"],
+  GGODACHEVICH: ["NGODACHEVICH", "NGODA", "GODACHEVICH", "GGODACHEVIC"],
+  MSORGENTE: ["SORGENTE"],
+  MBRUNI: ["BRUNI"],
+  MGOMEZ: ["GOMEZ"],
+};
+const INFERENCIA = [
+  ["ANUL", ["ANULA NC", "SE ANULA", "SEANULA", "ANULA CREDITO", "ANULACION DE FACTURA", "ANULA ND", "ANULA FC"]],
+  ["EFAC", ["REFACTURAC", "REFACTURACIOIN", "REACTURACION", "REFACTURA", "ERROR DE FACT", "EFAC"]],
+  ["DEVT", ["DEVOLUCION", "DEVOLVI", "DEVOLVIO", "REMITO DE RETIRO", "RETIRO DE MERCADERIA", "RECHAZO", "RECHAZARON"]],
+  ["CANC", ["ANULO PENDIENTE", "ANULA PENDIENTE", "CANCEL", "PEDIDO ANULADO"]],
+  ["FALTP", ["FALTO", "FALTANTE", "NO RECIBIO", "LE FALTA", "VA MENOS CANTIDAD", "MENOS CANTIDAD"]],
+  ["DIFP", ["DIF DE", "DIFERENCIA", "DIF PRECIO", "DIFP"]],
+  ["DESC", ["DESCUENTO", "DESC ", "AJUSTE"]],
+];
+const CAL_OK = "OK", CAL_INF = "INFERIDO", CAL_REV = "REVISAR";
+const COLUMNAS_NUEVAS = [
+  "TIPO COD", "TIPO", "MOTIVO COD", "MOTIVO", "% DESCUENTO",
+  "% DESCUENTOS (TODOS)", "USUARIO CARGA", "AUTORIZA", "AUTORIZA 2",
+  "NC ANULADA", "DETALLE", "CALIDAD PARSEO",
+];
+const _ALIAS_AUT = {};
+for (const [correcto, variantes] of Object.entries(AUTORIZANTES)) {
+  _ALIAS_AUT[correcto] = correcto;
+  for (const v of variantes) _ALIAS_AUT[v] = correcto;
+}
+const RE_PCT = /^(\d{1,3}(?:[.,]\d{1,2})?)%$/;
+const RE_NC = /\b(\d{3,})\b/;
+const _COD_MOTIVOS = [...new Set([...Object.keys(MOTIVOS), ...Object.keys(ALIAS_MOTIVO)])]
+  .filter(c => !c.includes(" "))
+  .sort((a, b) => b.length - a.length);
+const _USUARIOS_SORTED = [...USUARIOS_CARGA].sort();
+const _RE_PEGADO_TIPO = new RegExp("^([PT])(" + _COD_MOTIVOS.join("|") + ")$");
+const _RE_PEGADO_USER = new RegExp("^(" + _COD_MOTIVOS.join("|") + ")(" + _USUARIOS_SORTED.join("|") + ")$");
+
+function normalizar(texto) {
+  if (texto === null || texto === undefined) return "";
+  let t = String(texto).toUpperCase().trim();
+  const acentos = [["Á", "A"], ["É", "E"], ["Í", "I"], ["Ó", "O"], ["Ú", "U"], ["Ñ", "N"]];
+  for (const [a, b] of acentos) t = t.split(a).join(b);
+  for (const ch of ["_", "`", "´", "'", "\"", ";", ":", "*"]) t = t.split(ch).join(" ");
+  t = t.split(",").join(" ");
+  t = t.replace(/(?<=[A-Z])\./g, " ");
+  t = t.replace(/\s+/g, " ").trim();
+  for (const [viejo, nuevo] of PRE_REEMPLAZOS) t = t.split(viejo).join(nuevo);
+  return t;
+}
+function pctANumero(txt) {
+  const m = RE_PCT.exec(txt);
+  if (!m) return null;
+  return parseFloat(m[1].replace(",", ".")) / 100.0;
+}
+function inferirMotivo(texto) {
+  for (const [motivo, claves] of INFERENCIA) {
+    for (const c of claves) {
+      if (texto.includes(c)) return motivo;
+    }
+  }
+  return null;
+}
+function motivoDe(token, tipo) {
+  if (Object.prototype.hasOwnProperty.call(MOTIVO_SEGUN_TIPO, token)) {
+    const v = MOTIVO_SEGUN_TIPO[token][tipo];
+    return v === undefined ? null : v;
+  }
+  const cand = Object.prototype.hasOwnProperty.call(ALIAS_MOTIVO, token) ? ALIAS_MOTIVO[token] : token;
+  return Object.prototype.hasOwnProperty.call(MOTIVOS, cand) ? cand : null;
+}
+function fmtPctG(p100) {
+  let s;
+  if (Number.isInteger(p100)) {
+    s = String(p100);
+  } else {
+    s = parseFloat(p100.toPrecision(6)).toString();
+  }
+  return (s + "%").replace(".", ",");
+}
+function parsearObs(obs) {
+  const r = {};
+  for (const c of COLUMNAS_NUEVAS) r[c] = null;
+  const texto = normalizar(obs);
+
+  if (texto === "" || texto === "-" || texto === "NONE") {
+    r["MOTIVO COD"] = "SIN DATO";
+    r["MOTIVO"] = "Sin observacion";
+    r["CALIDAD PARSEO"] = CAL_REV;
+    r["DETALLE"] = "";
+    return r;
+  }
+
+  for (const [cod, frases] of FRASES_MOTIVO) {
+    for (const f of frases) {
+      if (texto.includes(f)) {
+        r["MOTIVO COD"] = cod;
+        r["MOTIVO"] = MOTIVOS[cod] || cod;
+        r["CALIDAD PARSEO"] = CAL_OK;
+        r["DETALLE"] = texto;
+        return r;
+      }
+    }
+  }
+
+  const tokens = texto.split(" ").filter(t => !["", "+", "-", "/"].includes(t));
+  const usados = new Set();
+  let motivo = null;
+
+  let idx = 0;
+  if (tokens.length) {
+    if (Object.prototype.hasOwnProperty.call(TIPOS, tokens[0])) {
+      r["TIPO COD"] = tokens[0]; r["TIPO"] = TIPOS[tokens[0]];
+      usados.add(0); idx = 1;
+    } else {
+      const m = _RE_PEGADO_TIPO.exec(tokens[0]);
+      if (m) {
+        r["TIPO COD"] = m[1]; r["TIPO"] = TIPOS[m[1]];
+        motivo = motivoDe(m[2], m[1]);
+        usados.add(0); idx = 1;
+      }
+    }
+  }
+
+  if (motivo === null && tokens.length > idx) {
+    const dos = tokens.slice(idx, idx + 2).join(" ");
+    let cand = motivoDe(dos, r["TIPO COD"]);
+    if (cand) {
+      motivo = cand; usados.add(idx); usados.add(idx + 1);
+    } else {
+      cand = motivoDe(tokens[idx], r["TIPO COD"]);
+      if (cand) {
+        motivo = cand; usados.add(idx);
+      } else {
+        const m = _RE_PEGADO_USER.exec(tokens[idx]);
+        if (m) {
+          motivo = motivoDe(m[1], r["TIPO COD"]);
+          r["USUARIO CARGA"] = ALIAS_USUARIO_CARGA[m[2]] || m[2];
+          usados.add(idx);
+        }
+      }
+    }
+  }
+
+  const pcts = [];
+  tokens.forEach((t, k) => {
+    if (usados.has(k)) return;
+    const v = pctANumero(t);
+    if (v !== null) { pcts.push(v); usados.add(k); }
+  });
+  if (pcts.length) {
+    r["% DESCUENTO"] = pcts[0];
+    r["% DESCUENTOS (TODOS)"] = pcts.map(p => fmtPctG(p * 100)).join(" + ");
+  }
+
+  let posUser = null;
+  if (r["USUARIO CARGA"] === null) {
+    for (let k = 0; k < tokens.length; k++) {
+      if (usados.has(k)) continue;
+      const t = tokens[k];
+      const cod = ALIAS_USUARIO_CARGA[t] || t;
+      if (USUARIOS_CARGA.has(cod)) {
+        r["USUARIO CARGA"] = cod;
+        usados.add(k); posUser = k;
+        break;
+      }
+    }
+  }
+
+  if (posUser !== null && tokens.length > posUser + 1) {
+    const sig = tokens[posUser + 1];
+    if (Object.prototype.hasOwnProperty.call(_ALIAS_AUT, sig)) {
+      r["AUTORIZA"] = _ALIAS_AUT[sig];
+      usados.add(posUser + 1);
+    }
+  }
+
+  for (let k = 0; k < tokens.length; k++) {
+    if (tokens[k] === "AUT" && tokens.length > k + 1) {
+      const nom = tokens[k + 1];
+      r["AUTORIZA 2"] = _ALIAS_AUT[nom] || nom;
+      usados.add(k); usados.add(k + 1);
+      break;
+    }
+  }
+
+  let calidad;
+  if (motivo === null) {
+    motivo = inferirMotivo(texto);
+    if (motivo === null && pcts.length) motivo = "DESC";
+    calidad = motivo ? CAL_INF : CAL_REV;
+  } else {
+    calidad = CAL_OK;
+  }
+
+  if (motivo === "ANUL") {
+    const m = RE_NC.exec(texto);
+    if (m) r["NC ANULADA"] = m[1];
+  }
+
+  if (motivo === null) {
+    motivo = "SIN CLASIFICAR";
+    r["MOTIVO"] = "Sin clasificar";
+  } else {
+    r["MOTIVO"] = MOTIVOS[motivo] || motivo;
+  }
+  r["MOTIVO COD"] = motivo;
+  r["CALIDAD PARSEO"] = calidad;
+
+  const resto = tokens.filter((t, k) => !usados.has(k));
+  r["DETALLE"] = resto.join(" ");
+  return r;
+}
+
+// La solapa de tipificación (gid=789004850) trae un registro por cada LÍNEA DE PRODUCTO de
+// cada COMPROBANTE (NCR o NDB), con el campo OBS repetido idéntico en todas las líneas de
+// un mismo comprobante — mismo patrón de deduplicación que ID_NCR/ID_DB en
+// processNdcRows(): hay que quedarse con UNA sola fila por COMPROBANTE antes de tipificar.
+// Columnas confirmadas: FECHA,COMPROBANTE,CLIENTE,PRODUCTO,COD_PRODUCTO,DESC_PRODUCTO,
+//   CANTIDAD,COSTO PRECIO,COSTO IMPORTE,PRECIO VENTA,VENTA IMPORTE,DIFERENCIA DE PRECIO,
+//   DIFERENCIA IMPORTE,UTILIDAD %,RUBRO,ORIGEN,TIPO CMP,EMP,OBS
+// COMPROBANTE usa el mismo formato de texto que "NOTA DE CREDITO"/"NOTA DE DEBITO" de la
+// solapa NDC principal — confirmado con un caso real presente en ambas solapas
+// ("NCR(D) A 0007-00014891") — el cruce se hace por texto EXACTO de comprobante, sin
+// ninguna transformación.
+// El $ y la cantidad de cada nota SIEMPRE salen de NDC_DETAIL.ncr/.ndb (ya deduplicados y
+// con el signo correcto, fuente única de la plata) — esta solapa solo aporta la
+// CLASIFICACIÓN (motivo/calidad/usuario/autoriza), nunca un importe propio, para no
+// duplicar ni desalinear montos.
+// Alcance confirmado con el usuario (06/08/2026, multiple choice):
+//   - Se tipifican tanto NCR como NDB, pero en DOS SECCIONES SEPARADAS (no se mezclan).
+//   - Se excluyen los comprobantes "NCR(D)..." de la tipificación (mismo regex
+//     /^NCR\(D\)/i que ya se usa para excluirlos del resto del dashboard).
+function processTipifRows(rawRows){
+  for(const k in TIPIF_BY_COMP) delete TIPIF_BY_COMP[k];
+  const seen=new Set();
+  let ncrCount=0, ndbCount=0, excluidas=0, otras=0;
+  for(const r of rawRows){
+    const comp=String(r['COMPROBANTE']||'').trim();
+    if(!comp||seen.has(comp)) continue;
+    seen.add(comp);
+    if(/^NCR\(D\)/i.test(comp)){ excluidas++; continue; }
+    const tipoCmp=String(r['TIPO CMP']||'').trim().toUpperCase();
+    if(tipoCmp!=='NCR'&&tipoCmp!=='NDB'){ otras++; continue; }
+    const parsed=parsearObs(r['OBS']);
+    TIPIF_BY_COMP[comp]={tipoCmp,...parsed};
+    if(tipoCmp==='NCR') ncrCount++; else ndbCount++;
+  }
+  console.log(`Tipificación: ${ncrCount} NCR y ${ndbCount} NDB tipificados (deduplicados por COMPROBANTE); ${excluidas} NCR(D) excluidas, ${otras} filas con TIPO CMP desconocido.`);
+}
+
+// Desglose "por motivo" (cantidad + importe, y calidad de parseo) de una lista de notas
+// (NDC_DETAIL.ncr o NDC_DETAIL.ndb) para el mes/filtros visibles — mismo scope que la
+// tarjeta resumen y la tabla de detalle (mes visible + empGrupoFilter/empFilter, sin
+// rubFilter porque ni la solapa NDC ni la de tipificación tienen columna RUBRO).
+function computeMotivoBreakdown(list, mesKey){
+  const rows=list.filter(d=>d.mes===mesKey
+    &&(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp))
+    &&(!empFilter||d.emp===empFilter));
+  const agg={};
+  for(const d of rows){
+    const t=TIPIF_BY_COMP[d.numero];
+    const motivo=t?(t['MOTIVO']||'Sin clasificar'):'Sin tipificar';
+    const calidad=t?t['CALIDAD PARSEO']:null;
+    if(!agg[motivo]) agg[motivo]={motivo,cantidad:0,importe:0,calOk:0,calInf:0,calRev:0,calSin:0};
+    agg[motivo].cantidad++;
+    agg[motivo].importe+=Math.abs(d.importe);
+    if(calidad===CAL_OK) agg[motivo].calOk++;
+    else if(calidad===CAL_INF) agg[motivo].calInf++;
+    else if(calidad===CAL_REV) agg[motivo].calRev++;
+    else agg[motivo].calSin++;
+  }
+  return Object.values(agg).sort((a,b)=>b.importe-a.importe);
+}
+
 // Neto de NDC (créditos + débitos) de un mes puntual, respetando empGrupoFilter/empFilter.
 // opts.ignoreFilters=true → ignora TODOS los filtros (para el "Objetivo mensual" sin mes
 // seleccionado, que ya hoy se calcula sin filtro de empresa/rubro).
@@ -1577,17 +1907,30 @@ function renderNdcDetalle(ndcMesKey){
   if(!ndcActiveCard){ wrap.innerHTML=''; return; }
   const list=ndcActiveCard==='ncr'?NDC_DETAIL.ncr:NDC_DETAIL.ndb;
   const titulo=ndcActiveCard==='ncr'?'Notas de Crédito':'Notas de Débito';
+  // MOTIVO/CALIDAD vienen de TIPIF_BY_COMP (solapa de tipificación, cruzada por número de
+  // comprobante) — pedido 06/08/2026. Si el comprobante no tiene fila en esa solapa (no
+  // publicada todavía, o nota no cubierta), se muestra "Sin tipificar" en gris.
+  const calColor={[CAL_OK]:'#4ade80',[CAL_INF]:'#facc15',[CAL_REV]:'#f87171'};
+  const motivoDeD=d=>{const t=TIPIF_BY_COMP[d.numero];return t?(t['MOTIVO']||'Sin clasificar'):'Sin tipificar';};
+  const calidadDeD=d=>{const t=TIPIF_BY_COMP[d.numero];return t?t['CALIDAD PARSEO']:null;};
   // Mismo scope que la tarjeta resumen: el mes visible (ndcMesKey) + empGrupoFilter/empFilter.
   // NO se filtra por rubFilter (la solapa NDC no tiene columna RUBRO), igual que en las
-  // tarjetas (skipRubroSafety).
+  // tarjetas (skipRubroSafety). Además, si hay un motivo seleccionado en "Motivos resumen"
+  // (motivoActivo, pedido 06/08/2026), se filtra la lista a SOLO ese motivo.
   let rows=list.filter(d=>d.mes===ndcMesKey
     &&(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp))
-    &&(!empFilter||d.emp===empFilter));
-  if(!rows.length){ wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--mut)">Sin ${titulo.toLowerCase()} en ${MLBL[ndcMesKey]||ndcMesKey}</div>`; return; }
+    &&(!empFilter||d.emp===empFilter)
+    &&(!motivoActivo||motivoDeD(d)===motivoActivo));
+  if(!rows.length){
+    const motivoTxt=motivoActivo?` con motivo "${motivoActivo}"`:'';
+    wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--mut)">Sin ${titulo.toLowerCase()}${motivoTxt} en ${MLBL[ndcMesKey]||ndcMesKey}</div>`;
+    return;
+  }
   const sorters={
     numero:(a,b)=>String(a.numero).localeCompare(String(b.numero),'es'),
     cliente:(a,b)=>String(a.cliente||'').localeCompare(String(b.cliente||''),'es'),
     fecha:(a,b)=>(a.fecha?a.fecha.getTime():0)-(b.fecha?b.fecha.getTime():0),
+    motivo:(a,b)=>motivoDeD(a).localeCompare(motivoDeD(b),'es'),
     importe:(a,b)=>Math.abs(a.importe)-Math.abs(b.importe)
   };
   const cmp=sorters[ndcSortCol]||sorters.importe;
@@ -1596,13 +1939,14 @@ function renderNdcDetalle(ndcMesKey){
   const arrow=col=>ndcSortCol===col?(ndcSortDir==='asc'?' ▲':' ▼'):'';
   const thCol=col=>ndcSortCol===col?'var(--acc)':'var(--tx)';
   const cols=[
-    {key:'numero',  label:'NRO NDC',        w:'26%', align:'left'},
-    {key:'cliente', label:'CLIENTE',        w:'34%', align:'left'},
-    {key:'fecha',   label:'FECHA',          w:'16%', align:'center'},
-    {key:'importe', label:'IMPORTE DE NDC', w:'24%', align:'right'}
+    {key:'numero',  label:'NRO NDC',        w:'18%', align:'left'},
+    {key:'cliente', label:'CLIENTE',        w:'26%', align:'left'},
+    {key:'fecha',   label:'FECHA',          w:'12%', align:'center'},
+    {key:'motivo',  label:'MOTIVO',         w:'22%', align:'left'},
+    {key:'importe', label:'IMPORTE DE NDC', w:'22%', align:'right'}
   ];
   wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
-    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">${titulo} · ${MLBL[ndcMesKey]||ndcMesKey} · ${rows.length.toLocaleString('es-AR')} notas</div>
+    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Lista detalle · ${MLBL[ndcMesKey]||ndcMesKey} · ${rows.length.toLocaleString('es-AR')} notas${motivoActivo?` · filtrado por "${motivoActivo}"`:''}</div>
     <div style="max-height:340px;overflow-y:auto">
       <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
         <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
@@ -1611,10 +1955,13 @@ function renderNdcDetalle(ndcMesKey){
         </tr></thead>
         <tbody>${rows.map(d=>{
           const fechaStr=d.fecha?`${d.fecha.getDate()} ${mn2[d.fecha.getMonth()]} ${d.fecha.getFullYear()}`:'—';
+          const cal=calidadDeD(d);
+          const dot=cal?`<span title="${cal}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${calColor[cal]||'var(--mut)'};margin-right:5px"></span>`:'';
           return `<tr style="border-bottom:1px solid var(--line)">
             <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.numero}</td>
             <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.cliente||'—'}</td>
             <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${fechaStr}</td>
+            <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${dot}${motivoDeD(d)}</td>
             <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(Math.abs(d.importe))}</td>
           </tr>`;
         }).join('')}</tbody>
@@ -1626,6 +1973,67 @@ function renderNdcDetalle(ndcMesKey){
       const col=th.dataset.col;
       if(ndcSortCol===col){ ndcSortDir=ndcSortDir==='asc'?'desc':'asc'; }
       else { ndcSortCol=col; ndcSortDir='desc'; }
+      renderNdcDetalle(ndcMesKey);
+    };
+  });
+}
+
+// "Motivos resumen" de la tipificación — pedido 06/08/2026, revisado 06/08/2026 (dos
+// vueltas): oculto mientras no haya una tarjeta de NDC/NDB desplegada (mismo gate que
+// "Lista detalle" / renderNdcDetalle, vía ndcActiveCard). Definición final (pedido
+// 06/08/2026): "Motivos resumen" y "Lista detalle" viajan siempre JUNTAS y son
+// EXCLUSIVAS de la tarjeta activa — si está seleccionada la tarjeta de Notas de Crédito
+// se muestran SOLO "Motivos resumen" y "Lista detalle" de Notas de Crédito; si está
+// seleccionada la de Notas de Débito se muestran SOLO las de Notas de Débito. Nunca se
+// mezclan ni se muestran las de ambos tipos a la vez (a diferencia de un ajuste
+// intermedio que hubo por el medio, donde por pedido puntual se mostraban las dos tablas
+// de motivo juntas — se volvió atrás sobre eso). Mismo scope de mes/empresa que las
+// tarjetas NDC. Cada fila de motivo muestra además un mini-resumen de calidad de parseo
+// (OK/INFERIDO/REVISAR/sin tipificar).
+function renderTipifBreakdown(ndcMesKey){
+  const wrap=document.getElementById('tipifWrap');
+  if(!wrap) return;
+  if(!ndcActiveCard){ wrap.innerHTML=''; return; }
+  const buildTabla=(list,titulo)=>{
+    const rows=computeMotivoBreakdown(list,ndcMesKey);
+    if(!rows.length) return '';
+    return `<div style="width:calc(50% - 5px);min-width:260px">
+      <div style="font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Motivos resumen</div>
+      <table class="tbl" style="width:100%;border-collapse:collapse;font-size:11.5px">
+        <thead><tr style="border-bottom:1px solid var(--line2)">
+          <th style="padding:4px 6px;text-align:left;font-weight:600">MOTIVO</th>
+          <th style="padding:4px 6px;text-align:right;font-weight:600">CANT.</th>
+          <th style="padding:4px 6px;text-align:right;font-weight:600">IMPORTE</th>
+        </tr></thead>
+        <tbody>${rows.map(r=>{
+          const calTxt=[r.calOk?`${r.calOk} OK`:null, r.calInf?`${r.calInf} inferido`:null, r.calRev?`${r.calRev} revisar`:null, r.calSin?`${r.calSin} sin tipificar`:null].filter(Boolean).join(' · ');
+          // Clickeable — pedido 06/08/2026: seleccionar un motivo filtra "Lista detalle" a
+          // solo ese motivo (motivoActivo). Fila resaltada si es el motivo seleccionado.
+          const on=motivoActivo===r.motivo;
+          return `<tr data-motivo="${r.motivo}" style="border-bottom:1px solid var(--line);cursor:pointer;${on?'background:rgba(37,99,235,.12)':''}">
+            <td style="padding:4px 6px;text-align:left">${r.motivo}<div style="font-size:9.5px;color:var(--mut2)">${calTxt}</div></td>
+            <td style="padding:4px 6px;text-align:right;font-family:'IBM Plex Mono',monospace">${r.cantidad.toLocaleString('es-AR')}</td>
+            <td style="padding:4px 6px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(r.importe)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+  };
+  // Exclusivo de la tarjeta activa: si ndcActiveCard==='ncr' se arma SOLO el "Motivos
+  // resumen" de Notas de Crédito; si ==='ndb', SOLO el de Notas de Débito. Nunca ambos.
+  const html=ndcActiveCard==='ncr'
+    ?buildTabla(NDC_DETAIL.ncr,'Notas de Crédito')
+    :buildTabla(NDC_DETAIL.ndb,'Notas de Débito');
+  if(!html){ wrap.innerHTML=''; return; }
+  wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;display:flex;gap:20px;flex-wrap:wrap">${html}</div>`;
+  // Clic en una fila de "Motivos resumen": togglea motivoActivo (mismo motivo → lo
+  // deselecciona) y refresca ambas tablas — la propia (para actualizar el resaltado) y
+  // "Lista detalle" (para aplicar/quitar el filtro).
+  wrap.querySelectorAll('tr[data-motivo]').forEach(tr=>{
+    tr.onclick=()=>{
+      const m=tr.dataset.motivo;
+      motivoActivo=(motivoActivo===m)?null:m;
+      renderTipifBreakdown(ndcMesKey);
       renderNdcDetalle(ndcMesKey);
     };
   });
@@ -2037,10 +2445,16 @@ const urlCli  = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOB
   // (igual que urlCli): si todavía no se reinició "Publicar en la web" con esta solapa
   // incluida, el dashboard sigue funcionando igual que antes, sin ningún ajuste de NDC.
   const urlNdc  = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1229588367&single=true&output=csv`;
+  // Tipificación de Notas de Crédito/Débito — solapa nueva, pedido 06/08/2026. Tolerante a
+  // fallos (igual que urlCli/urlNdc): al momento de este cambio la solapa TODAVÍA NO está
+  // publicada dentro de "Publicar en la web" (falta que el usuario la re-publique con este
+  // gid incluido), así que hasta entonces esta fetch va a devolver vacío y el dashboard
+  // sigue funcionando igual que antes, mostrando "Sin tipificar" en la tabla de detalle.
+  const urlTipif = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=789004850&single=true&output=csv`;
   try {
-    const [resRem, resPend, resProd, resCli, resNdc] = await Promise.all([fetch(urlRem), fetch(urlPend), fetch(urlProd), fetch(urlCli).catch(()=>({ok:false,text:()=>''})), fetch(urlNdc).catch(()=>({ok:false,text:()=>''}))]);
+    const [resRem, resPend, resProd, resCli, resNdc, resTipif] = await Promise.all([fetch(urlRem), fetch(urlPend), fetch(urlProd), fetch(urlCli).catch(()=>({ok:false,text:()=>''})), fetch(urlNdc).catch(()=>({ok:false,text:()=>''})), fetch(urlTipif).catch(()=>({ok:false,text:()=>''}))]);
     if(!resRem.ok) throw new Error(`HTTP ${resRem.status}`);
-    const [textRem, textPend, textProd, textCli, textNdc] = await Promise.all([resRem.text(), resPend.text(), resProd.text(), resCli.ok?resCli.text():Promise.resolve(''), resNdc.ok?resNdc.text():Promise.resolve('')]);
+    const [textRem, textPend, textProd, textCli, textNdc, textTipif] = await Promise.all([resRem.text(), resPend.text(), resProd.text(), resCli.ok?resCli.text():Promise.resolve(''), resNdc.ok?resNdc.text():Promise.resolve(''), resTipif.ok?resTipif.text():Promise.resolve('')]);
     // Construir lookup de productos PRIMERO (para enriquecer remitos)
     if(resProd.ok&&textProd){const rowsProd=parseCsvText(textProd);if(rowsProd.length>0)processProductRows(rowsProd);}
     if(textCli){const rowsCli=parseCsvText(textCli);if(rowsCli.length>0)processClientRows(rowsCli);}
@@ -2050,6 +2464,10 @@ const urlCli  = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOB
     // processNdcRows() debe correr DESPUÉS de processRawRows (que resetea ORIG_AGG/
     // ORIG_DAYAGG/EJEC_ROWS al principio) para que el neteo de NDC no se pierda.
     if(textNdc){const rowsNdc=parseCsvText(textNdc);if(rowsNdc.length>0)processNdcRows(rowsNdc);}
+    // processTipifRows() no depende de processNdcRows (solo llena TIPIF_BY_COMP, que se
+    // consulta por número de comprobante recién al renderizar), pero se corre en el mismo
+    // orden por prolijidad.
+    if(textTipif){const rowsTipif=parseCsvText(textTipif);if(rowsTipif.length>0)processTipifRows(rowsTipif);}
     if(resPend.ok){const rowsPend=parseCsvText(textPend);if(rowsPend.length>0)processPendientesRows(rowsPend);}
   } catch(err) {
     status.textContent = `⚠ Error al conectar: ${err.message}`;
@@ -2243,7 +2661,20 @@ function renderUtilidadClientes(){
 <!-- - breve descripcion de lo hecho: se agregó una exclusión total (KPIs, gauges, comerciales y tabla de detalle) para cualquier Nota de Crédito cuyo texto empiece con el prefijo "NCR(D)", a pedido puntual del usuario sobre un caso real de julio; se confirmó que el criterio aplica solo a Notas de Crédito (no a Notas de Débito) y que el match debe ser de prefijo estricto, no de "(D)" en cualquier posición del texto. -->
 <!-- 94 - Dashboard ventas REM 2026 - subtitulo venta activa con NDCs sin importe: ajuste puntual de texto en la tarjeta "Venta activa". El k-sub mostraba "· neto NDC $X" (ej: "neto NDC -93,4 M"), y el usuario pidió sacar el importe y dejar solo la aclaración de que el total ya contempla las NDCs. Cambia de "sin Tránsito · neto NDC ${ndcAdjVenta?fmtM(ndcAdjVenta):'$0'}" a "sin Tránsito · con NDCs". Sin cambios de cálculo: totalVtaNeto sigue siendo exactamente el mismo (venta bruta sin Tránsito + neto de NDC, con la exclusión de NCR(D) del archivo 93); solo cambia el texto mostrado debajo del número. Pedido 04/08/2026. -->
 <!-- - breve descripcion de lo hecho: se cambió el subtítulo de la tarjeta "Venta activa" de "sin Tránsito · neto NDC $X" a "sin Tránsito · con NDCs", quitando el importe del ajuste y dejando solo la aclaración de que el total ya contempla las Notas de Crédito/Débito, sin tocar ningún cálculo. -->
-
+<!-- 96 - Dashboard ventas REM 2026 - tipificacion NDC segun OBS: motivo, calidad y desglose: se incorpora al dashboard el "Tipificador de Notas de Credito.py" que el usuario usa localmente para clasificar el campo OBS (observación libre del ERP) de cada Nota de Crédito/Débito. Se porteó 1:1 la lógica del script (mismos diccionarios MOTIVOS/ALIAS_MOTIVO/AUTORIZANTES/INFERENCIA/etc. y la función parsearObs(), validada 216/216 casos contra el Python original antes de este archivo) directo al <script> del dashboard. Se agrega una SEXTA solapa del Google Sheets (gid=789004850, "COMPROBANTE,CLIENTE,...,TIPO CMP,EMP,OBS") con un registro por línea de producto de cada comprobante NCR o NDB — nueva función processTipifRows() dedupea por COMPROBANTE (mismo patrón que ID_NCR/ID_DB), excluye los comprobantes "NCR(D)..." (mismo regex /^NCR\(D\)/i que el archivo 93, confirmado con el usuario que aplica también acá) y corre parsearObs(OBS) una sola vez por comprobante único, guardando el resultado en TIPIF_BY_COMP[comprobante]. El cruce con la solapa NDC principal es por TEXTO EXACTO de comprobante (confirmado con un caso real presente en ambas solapas: "NCR(D) A 0007-00014891"). Decisión de diseño clave: el $ y la cantidad de cada nota SIEMPRE salen de NDC_DETAIL.ncr/.ndb (ya deduplicados, con el signo correcto — fuente única de la plata); la solapa nueva solo aporta la clasificación, nunca un importe propio, para no duplicar ni desalinear montos. Nueva función computeMotivoBreakdown(list,mesKey) agrupa NDC_DETAIL.ncr o .ndb por MOTIVO (mismo scope que las tarjetas: mes visible + empGrupoFilter/empFilter, sin rubFilter) sumando cantidad+importe y contando calidad de parseo (OK/INFERIDO/REVISAR/sin tipificar); las notas sin comprobante-match en la solapa nueva caen en "Sin tipificar". Por pedido explícito del usuario (06/08/2026, multiple choice): se tipifican tanto NCR como NDB pero en DOS SECCIONES SEPARADAS, nunca mezcladas. UI: la tabla de detalle desplegable de NDC (renderNdcDetalle) suma una columna MOTIVO con un punto de color según calidad de parseo (verde=OK, amarillo=INFERIDO, rojo=REVISAR, sin punto=sin tipificar) y nuevo sorter por motivo; se agrega un contenedor nuevo #tipifWrap (siempre visible, no depende de que una tarjeta esté desplegada) con dos mini-tablas "por motivo" (Notas de Crédito y Notas de Débito, cada una con MOTIVO | CANTIDAD | IMPORTE y el desglose de calidad debajo de cada motivo), renderizadas por renderTipifBreakdown(). Se agrega el fetch de la sexta solapa (urlTipif, tolerante a fallos igual que urlCli/urlNdc) al Promise.all del handler de carga. BLOQUEANTE PENDIENTE (reportado al usuario en el chat): al momento de este archivo, la URL de publicación de esta solapa (mismo patrón que las otras 5: .../pub?gid=789004850&single=true&output=csv) devuelve VACÍO — la solapa todavía no está incluida en "Publicar en la web" del Google Sheets; hasta que el usuario la re-publique, esta fetch sigue devolviendo vacío y toda nota se muestra como "Sin tipificar" (el resto del dashboard sigue funcionando exactamente igual que antes, sin este dato). Verificado con test aislado en Node (dedupe por comprobante, exclusión NCR(D), separación NCR/NDB, fallback "Sin tipificar" para notas sin match, filtros empFilter/empGrupoFilter) usando datos reales de muestra obtenidos de la solapa nueva (477 filas, 01/07 al 05/08/2026). Pedido 06/08/2026. -->
+<!-- - breve descripcion de lo hecho: se incorporó al dashboard la clasificación automática de Notas de Crédito/Débito por MOTIVO (devolución, error de facturación, descuento, faltante, etc.) usando la misma lógica del script de Python que el usuario ya usaba manualmente, cruzando por número de comprobante contra una nueva solapa del Sheets que trae el campo de observaciones; se agregó una columna MOTIVO (con indicador de calidad de parseo) en la tabla de detalle de NDC, y dos tablas nuevas de desglose por motivo (una para Notas de Crédito y otra separada para Notas de Débito, a pedido del usuario) siempre visibles debajo de las tarjetas; los importes en $ siguen saliendo siempre de los datos ya validados de la solapa NDC original, la solapa nueva solo aporta la clasificación. Falta que el usuario publique en la web esa solapa nueva (gid=789004850) para que los datos empiecen a cargar en producción; mientras tanto todo se muestra como "Sin tipificar" sin afectar el resto del dashboard. -->
+<!-- 98 - Dashboard ventas REM 2026 - desglose por motivo solo al desplegar tarjeta NDC o NDB: ajuste de visibilidad pedido por el usuario sobre el archivo 96. Las dos tablas "Notas de Crédito · por motivo" y "Notas de Débito · por motivo" quedaban SIEMPRE visibles debajo de las tarjetas resumen, aun sin haber hecho clic en ninguna; el usuario pidió que por defecto solo se vean las 2 tarjetas de totales (NDC y NDB) y que el desglose por motivo se comporte exactamente igual que la tabla de detalle ya existente (renderNdcDetalle): oculto por defecto, y al hacer clic en la tarjeta "Notas de Crédito" se despliega SOLO el desglose de Notas de Crédito (arriba de su tabla de detalle de siempre), mientras que al hacer clic en "Notas de Débito" se despliega SOLO el de Notas de Débito — nunca los dos desgloses juntos, ni tampoco cuando no hay ninguna tarjeta activa. Cambio puntual en renderTipifBreakdown(): se agregó el mismo gate `if(!ndcActiveCard){ wrap.innerHTML=''; return; }` que ya usa renderNdcDetalle(), y se reemplazó la construcción de ambas tablas (ncrHtml+ndbHtml concatenadas) por una única tabla condicional según ndcActiveCard==='ncr'|'ndb'. Sin cambios de cálculo ni de datos: mismo computeMotivoBreakdown(), mismo scope de mes/empresa, mismo contenido de cada tabla — solo cambia CUÁNDO y CUÁL se muestra. Verificado con test aislado en Node (bloque extraído textualmente del archivo real): sin tarjeta activa el contenedor queda vacío, con "ncr" activo aparece solo el desglose de Notas de Crédito, con "ndb" activo aparece solo el de Notas de Débito, y al volver a cerrar la tarjeta el contenedor vuelve a vaciarse. Pedido 06/08/2026. -->
+<!-- - breve descripcion de lo hecho: las tablas de desglose por motivo de Notas de Crédito y de Débito dejaron de mostrarse siempre; ahora están ocultas por defecto y aparecen recién al hacer clic en la tarjeta correspondiente (igual que la tabla de detalle ya existente), mostrando en cada caso solo el desglose de la tarjeta clickeada, nunca los dos juntos. -->
+<!-- 99 - Dashboard ventas REM 2026 - resumen por motivo NCR y NDB juntos mas detalle linea por linea: corrección sobre el archivo 98. El usuario mostró una captura señalando que faltaban las tablas de desglose que se veían en el archivo 96 (Notas de Crédito · por motivo Y Notas de Débito · por motivo, lado a lado) — el archivo 98 se había pasado de rosca mostrando SOLO el desglose de la tarjeta clickeada, cuando en realidad esto tiene que funcionar como un "resumen" general: al hacer clic en CUALQUIERA de las 2 tarjetas (NCR o NDB) se muestran LAS DOS tablas de desglose por motivo juntas (igual que en el archivo 96), y debajo de ese resumen sigue apareciendo la tabla de detalle línea por línea de SOLO la tarjeta clickeada (renderNdcDetalle, sin cambios). Es decir: se mantiene el gate de visibilidad del archivo 98 (nada se muestra hasta que se hace clic en alguna tarjeta), pero se revierte la restricción de "solo una de las dos tablas de motivo" que ese mismo archivo había introducido por error de interpretación. Cambio puntual en renderTipifBreakdown(): se vuelve a construir ncrHtml y ndbHtml (como en el archivo 96) en vez de una sola tabla condicional, manteniendo el `if(!ndcActiveCard){...}` del archivo 98. Sin cambios de cálculo ni de datos. Verificado con test aislado en Node: sin tarjeta activa el contenedor queda vacío; con "ncr" activo aparecen AMBAS tablas de desglose (Notas de Crédito y Notas de Débito); con "ndb" activo también aparecen AMBAS. Pedido 06/08/2026. -->
+<!-- - breve descripcion de lo hecho: se corrigió que al desplegar cualquiera de las 2 tarjetas de NDC/NDB solo apareciera el desglose por motivo de esa tarjeta puntual; ahora, al hacer clic en cualquiera de las 2, aparecen las DOS tablas de desglose por motivo juntas (como resumen general) y debajo la tabla de detalle línea por línea de la tarjeta clickeada. -->
+<!-- 100 - Dashboard ventas REM 2026 - fix clic tarjeta NDC no disparaba el desglose por motivo: bug real encontrado tras el archivo 99. El usuario reportó que, al hacer clic en la tarjeta de Notas de Crédito/Débito, seguía sin verse el desglose por motivo (solo aparecía la tabla de detalle línea por línea, ya con su columna MOTIVO). Causa: el handler onclick de las tarjetas #kpisNdc (dentro de render(), línea ~699) solo llamaba a renderNdcDetalle(ndcMesKey) para refrescar la tabla de detalle al togglear ndcActiveCard — nunca llamaba a renderTipifBreakdown(ndcMesKey). La llamada a renderTipifBreakdown que se agregó en el archivo 96 solo vive dentro del render() completo (se ejecuta en la carga inicial o al cambiar cualquier filtro), pero el click de la tarjeta NDC/NDB usa su propio mini-refresh liviano que no pasa por ahí — por eso el desglose por motivo solo llegaba a verse si, DESPUÉS de clickear la tarjeta, se disparaba un render() completo por otro motivo (cambiar de mes, filtrar por empresa, etc.), nunca en el clic mismo. Fix de una sola línea: se agrega `renderTipifBreakdown(ndcMesKey);` justo después de `renderNdcDetalle(ndcMesKey);` dentro de ese mismo onclick. Se revisó que no exista ningún otro punto donde se reasigne ndcActiveCard sin pasar por ahí (solo hay un lugar). Sin cambios de cálculo ni de layout. Pedido 06/08/2026. -->
+<!-- - breve descripcion de lo hecho: se corrigió un bug real por el cual el desglose por motivo de Notas de Crédito/Débito no aparecía al hacer clic en la tarjeta correspondiente (el clic solo refrescaba la tabla de detalle, no el resumen por motivo); ahora el clic dispara los dos refrescos juntos. -->
+<!-- 101 - Dashboard ventas REM 2026 - Lista detalle y Motivos resumen solo de la tarjeta activa: dos pedidos del usuario sobre el archivo 100, para simplificar la comunicación de ahora en más. (1) Nomenclatura fija: la tabla que arma renderNdcDetalle pasa a llamarse "Lista detalle" (se agregó ese texto al título de la tabla: antes "Notas de Crédito · Jul · 95 notas", ahora "Notas de Crédito · Lista detalle · Jul · 95 notas"); la tabla que arma renderTipifBreakdown pasa a llamarse "Motivos resumen" (antes "Notas de Crédito · por motivo", ahora "Notas de Crédito · Motivos resumen"). (2) Vuelta atrás sobre el comportamiento del archivo 99: el usuario pidió que "Motivos resumen" vuelva a ser EXCLUSIVO de la tarjeta activa (no las dos tablas juntas como se dejó en el 99) — si está seleccionada la tarjeta de Notas de Crédito se muestran SOLO "Motivos resumen" + "Lista detalle" de Notas de Crédito; si está seleccionada la de Notas de Débito, SOLO las de Notas de Débito. Cambio puntual en renderTipifBreakdown(): se reemplaza la construcción de ncrHtml+ndbHtml concatenados por una tabla condicional única según ndcActiveCard==='ncr'|'ndb' (mismo patrón que había en el archivo 98, ahora combinado con el fix del clic del archivo 100, que sigue vigente). Sin cambios de cálculo ni de datos. Verificado con test aislado en Node: labels correctos ("Notas de Crédito · Motivos resumen" / "Notas de Débito · Motivos resumen") y exclusividad por tarjeta (con "ncr" activo NO aparece el de Notas de Débito, y viceversa). Pedido 06/08/2026. -->
+<!-- - breve descripcion de lo hecho: se le puso nombre fijo a las 2 tablas de la sección de Notas de Crédito/Débito ("Lista detalle" para el detalle línea por línea, "Motivos resumen" para el desglose por motivo) y se volvió a que "Motivos resumen" muestre solo los datos de la tarjeta seleccionada (Notas de Crédito O Notas de Débito, nunca las dos juntas). -->
+<!-- 102 - Dashboard ventas REM 2026 - clic en motivo resumen filtra la lista detalle: nueva interacción pedida por el usuario sobre el archivo 101, con captura de referencia. Cada fila de "Motivos resumen" (ej: "Faltante total") ahora es clickeable: al hacer clic, se guarda ese motivo en la nueva variable global motivoActivo y se filtra "Lista detalle" para mostrar SOLO las notas de ese motivo (antes mostraba todas las notas de la tarjeta activa, sin importar el motivo). La fila del motivo seleccionado queda resaltada (fondo celeste tenue) dentro de "Motivos resumen", y el título de "Lista detalle" agrega ` · filtrado por "Faltante total"` para dejarlo explícito. Clic en la MISMA fila de motivo lo deselecciona (vuelve a mostrar todas las notas de la tarjeta); clic en OTRO motivo cambia el filtro directamente, sin necesidad de deseleccionar antes. Al abrir/cerrar/cambiar la tarjeta de Notas de Crédito/Débito (mismo onclick del archivo 100) se limpia motivoActivo automáticamente, para no arrastrar un filtro de un motivo que puede no existir en la otra tarjeta o en el nuevo mes. Cambios puntuales: (1) nuevo global `let motivoActivo=null`; (2) en el onclick de las tarjetas #kpisNdc, se agrega `motivoActivo=null;`; (3) en renderTipifBreakdown()/buildTabla(), cada `<tr>` de motivo suma `data-motivo="${r.motivo}"`, resaltado condicional, y — después de fijar wrap.innerHTML — un `wrap.querySelectorAll('tr[data-motivo]').forEach(...)` que togglea motivoActivo y vuelve a llamar renderTipifBreakdown()+renderNdcDetalle(); (4) en renderNdcDetalle(), motivoDeD()/calColor se adelantan antes del filtro inicial de rows para poder aplicar `&&(!motivoActivo||motivoDeD(d)===motivoActivo)` en el mismo filtro, y el mensaje de "sin notas" y el título de la tabla reflejan el motivo activo. Sin cambios de cálculo: el filtro es puramente de visualización sobre NDC_DETAIL, no toca NDC_MES_AGG ni ningún total. Verificado con test aislado en Node simulando clics reales (querySelectorAll con cache estable + wiring de onclick): sin filtro aparecen todas las notas de la tarjeta; clic en un motivo deja solo esas notas y muestra el indicador de filtro; clic de nuevo en el mismo motivo lo limpia; clic en un motivo distinto cambia el filtro sin pasos intermedios. Pedido 06/08/2026. -->
+<!-- - breve descripcion de lo hecho: ahora se puede hacer clic en cualquier fila de "Motivos resumen" (ej: "Faltante total") para que "Lista detalle" muestre solo las notas de ese motivo puntual; un segundo clic en la misma fila quita el filtro, y clickear otro motivo lo reemplaza directamente. -->
+<!-- 103 - Dashboard ventas REM 2026 - sin prefijo redundante y ancho de motivos resumen igual a la tarjeta: dos ajustes visuales pedidos por el usuario sobre el archivo 102. (1) Se quita el prefijo "Notas de Crédito"/"Notas de Débito" de los títulos de las dos tablas ("Motivos resumen" y "Lista detalle"), por redundante ya que ambas viven dentro de la misma sección "Notas de Crédito / Débito" y bajo la tarjeta ya seleccionada. Antes: "Notas de Crédito · Motivos resumen" y "Notas de Crédito · Lista detalle · Jul · 95 notas"; ahora: "Motivos resumen" y "Lista detalle · Jul · 95 notas". El mensaje de "sin notas" (cuando no hay resultados) NO se tocó — sigue diciendo "Sin notas de crédito en Jul" porque ahí sí aporta información (no es un título repetido). (2) El contenedor de "Motivos resumen" pasa de `flex:1` (ocupaba todo el ancho disponible, ya que ahora se muestra una sola tabla a la vez desde el archivo 98/101) a `width:calc(50% - 5px)` — mismo ancho que UNA tarjeta del grid de 2 columnas #kpisNdc (grid-template-columns:repeat(2,1fr) con gap:10px heredado de .kpis, de donde sale el cálculo 50% menos la mitad del gap). Sin cambios de cálculo ni de interacción (clic en motivo sigue filtrando "Lista detalle" igual que en el archivo 102). Pedido 06/08/2026. -->
+<!-- - breve descripcion de lo hecho: se sacó el prefijo "Notas de Crédito"/"Notas de Débito" de los títulos de "Motivos resumen" y "Lista detalle" por redundante, y se ajustó el ancho de "Motivos resumen" para que coincida con el ancho de una tarjeta de NDC/NDB en vez de ocupar todo el ancho disponible. -->
 
 
 

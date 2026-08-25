@@ -481,6 +481,22 @@ svg{display:block;width:100%;overflow:visible}
   </div>
 </div>
 
+<!-- Utilidad anual por familias de productos — pedido 25/08/2026. Mismo estilo/mecánica que
+     "Utilidad anual por comercial" del tablero de Comerciales Seguimiento (archivo adjuntado
+     por el usuario como modelo): tabla fija Ene→Ago (no cambia con el filtro de Período), sí
+     respeta Empresa/Rubro, ordenable por columna, columna final UTIL AÑO ordenada de mayor a
+     menor por defecto. Familia = columna FAMILIA (Q) de LISTADO PRODUCTOS en el Google Sheets
+     en vivo, pero SOLO para una lista cerrada de 11 familias pedidas por el usuario (ver
+     FAM_ALLOWLIST) — ajuste 26/08/2026 tras ver que la primera versión traía las ~104
+     familias del sheet. Cualquier otra familia queda afuera de la tabla. -->
+<div class="card" style="margin-top:14px;margin-bottom:14px" id="famAnualCard">
+  <div class="c-head">
+    <span class="c-title">Utilidad anual por familias de productos</span>
+    <span class="c-note" id="famAnualNote"></span>
+  </div>
+  <div id="famAnualWrap"></div>
+</div>
+
 <div class="card" style="margin-top:14px;margin-bottom:14px" id="comCard">
   <div class="c-head">
     <span class="c-title">Seguimiento comerciales</span>
@@ -733,6 +749,7 @@ function render(){
   if(PEND_RAW)calcPendientesFiltered();
   renderUtilidadNegativa();
   renderUtilidadClientes();
+  renderUtilidadAnualFamilias();
   renderComerciales();
   renderRemitosPorComercial();
   renderPendientesPorComercial();
@@ -1010,6 +1027,7 @@ function processRawRows(rawRows, sourceName) {
   REMS_RAW.length=0;
   for(const k in CLI_AGG)delete CLI_AGG[k];
   EJEC_ROWS.length=0;
+  FAM_ROWS.length=0;
   for(const k in ORIG_AGG)delete ORIG_AGG[k];
   for(const k in ORIG_DAYAGG)delete ORIG_DAYAGG[k];
   const _seenComp=new Set();
@@ -1090,6 +1108,15 @@ function processRawRows(rawRows, sourceName) {
       CLI_AGG[mes][_cliKey].prods[_prodFull].vta+=vta;
       CLI_AGG[mes][_cliKey].prods[_prodFull].cos+=cos;
       EJEC_ROWS.push({mes,rawcli:_rawcli,emp,rub,vta,cos,estado});
+      // Acumular en FAM_ROWS por FAMILIA de producto (columna Q de LISTADO PRODUCTOS) — pedido
+      // 25/08/2026, para "Utilidad anual por familias de productos". Reutiliza _pcode (mismo
+      // código de producto ya resuelto arriba para ORIGEN). Lista CERRADA (FAM_ALLOWLIST, 11
+      // familias puntuales pedidas por el usuario) — cualquier producto cuya FAMILIA no esté
+      // en esa lista queda afuera de la tabla, no solo los placeholders.
+      const _fam=FAM_LOOKUP[_pcode];
+      if(_fam&&FAM_ALLOWLIST.has(_fam)){
+        FAM_ROWS.push({mes,familia:_fam,emp,rub,vta,cos,estado});
+      }
     }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
@@ -1216,11 +1243,21 @@ const remExpanded=new Set(); // comerciales expandidos en "Remitos por comercial
 let pendComSortCol='vta'; let pendComSortDir='desc'; // orden tabla "Pendientes por comercial" (historico completo)
 const pendComExpanded=new Set(); // comerciales expandidos en "Pendientes por comercial" (historico completo)
 const PROD_LOOKUP={};
+// FAM_LOOKUP: { CODIGO → FAMILIA } — columna Q de LISTADO PRODUCTOS en el Google Sheets en
+// vivo (pedido 25/08/2026, para "Utilidad anual por familias de productos"). AJUSTE 26/08/2026:
+// el usuario pidió que la tabla muestre ÚNICAMENTE estas 11 familias puntuales (no todas las
+// que existan en la columna FAMILIA) — lista cerrada, confirmada con el usuario ("es la lista
+// completa"). Cualquier otra familia (incluidos los placeholders "-"/"Z_RESTRINGIDO"/"REVISAR
+// FAMILIA") queda afuera de la tabla.
+const FAM_LOOKUP={};
+const FAM_ALLOWLIST=new Set(['ALUMINIO','BARMAN','FILM','MANTECA','STRETCH','VYMAT INTERC','VYMAT ROLLOS','FILM ECO','BARMAN BEIGE','BOBINAS ALUMAX','FILM REPUESTO']);
+const FAM_ROWS=[]; // filas activas por familia de producto: {mes,familia,emp,rub,vta,cos,estado}
 const CLIENT_LOOKUP={}; // { codigoCliente → ejecutivo }
 const CLIENT_NAME_LOOKUP={}; // { nombreNormalizado → ejecutivo } — para cruzar por razón social (ej: pendientes)
 const ORIG_AGG={};
 const ORIG_DAYAGG={}; // { ORIGEN: { MES: { DIA: vta } } } — para avance diario
 const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT','TERCEROS'];
+let famAnualSortCol='util'; let famAnualSortDir='desc'; // orden tabla "Utilidad anual por familias de productos"
 // Objetivos fijos mensuales por fábrica, provistos por gerencia (ya no se calculan por promedio/participación)
 const GAUGE_OBJETIVOS={BARMAN:400_000_000,GRAFICA:70_000_000,TUBOS:600_000_000,VYMAT:800_000_000,TERCEROS:450_000_000};
 
@@ -1394,10 +1431,16 @@ function calcPendientesFiltered(){
 
 function processProductRows(rows){
   for(const k in PROD_LOOKUP)delete PROD_LOOKUP[k];
+  for(const k in FAM_LOOKUP)delete FAM_LOOKUP[k];
   for(const r of rows){
     const cod=String(r['CODIGO']||'').trim();
     const orig=String(r['ORIGEN']||'').trim();
     if(cod&&orig)PROD_LOOKUP[cod]=orig;
+    // FAMILIA (columna Q de LISTADO PRODUCTOS) — pedido 25/08/2026. Se guarda tal cual viene
+    // del sheet; el filtro a las 11 familias pedidas (FAM_ALLOWLIST) se aplica después, al
+    // acumular FAM_ROWS.
+    const fam=String(r['FAMILIA']||'').trim();
+    if(cod&&fam)FAM_LOOKUP[cod]=fam;
   }
 }
 
@@ -2770,6 +2813,88 @@ function renderUtilidadClientes(){
     <td style="padding:6px 8px;text-align:right;white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${tdc};margin-right:4px;vertical-align:middle"></span><span style="color:${tdc};font-weight:700;font-size:11px">${totPct.toFixed(1)}%</span></td>`;
   tbody.appendChild(totRow);
 }
+
+// Tabla fija de utilidad % mes a mes por FAMILIA de producto (columna Q de LISTADO PRODUCTOS,
+// vía FAM_ROWS), para el año completo (Ene→Ago, o los meses que haya cargados). A propósito
+// NO usa mesFilter (no cambia con el filtro de Período); sí respeta Empresa y Rubro. Mismo
+// estilo/mecánica que "Utilidad anual por comercial" del tablero de Comerciales Seguimiento
+// (adjuntado por el usuario como modelo) — pedido 25/08/2026. Solo considera remitos
+// Firmados, igual que ese modelo. Solo se consideran las 11 familias de FAM_ALLOWLIST
+// (lista cerrada pedida por el usuario); cualquier otra familia, o sin ventas en ningún
+// mes, no aparece (ver FAM_ROWS).
+function renderUtilidadAnualFamilias(){
+  const wrap=document.getElementById('famAnualWrap');
+  const note=document.getElementById('famAnualNote');
+  if(!wrap)return;
+  if(!MESES.length){ wrap.innerHTML=''; if(note)note.textContent=''; return; }
+  const passFE=d=>(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp))
+    &&(!empFilter||d.emp===empFilter)
+    &&(!rubFilter||d.rub===rubFilter);
+  const rowsFirm=FAM_ROWS.filter(d=>d.estado==='Firmada'&&passFE(d));
+  const mesesOrdenados=[...MESES].sort();
+  if(note)note.textContent=`${MLBL[mesesOrdenados[0]]||mesesOrdenados[0]}–${MLBL[mesesOrdenados[mesesOrdenados.length-1]]||mesesOrdenados[mesesOrdenados.length-1]} · Firmados · fijo (no cambia con el filtro de período)`;
+  const grouped={};
+  rowsFirm.forEach(d=>{
+    const fam=d.familia;
+    if(!grouped[fam])grouped[fam]={};
+    if(!grouped[fam][d.mes])grouped[fam][d.mes]={vta:0,cos:0};
+    grouped[fam][d.mes].vta+=d.vta;
+    grouped[fam][d.mes].cos+=d.cos;
+  });
+  const utilColor=pct=>pct<40?'#f87171':pct<50?'#d97706':'#4ade80';
+  let filas=Object.entries(grouped).map(([fam,meses])=>{
+    let totVta=0,totCos=0;
+    const porMes={};
+    mesesOrdenados.forEach(m=>{
+      const d=meses[m];
+      if(d&&d.vta){
+        porMes[m]={pct:(d.vta-d.cos)/d.vta*100};
+        totVta+=d.vta; totCos+=d.cos;
+      } else {
+        porMes[m]=null;
+      }
+    });
+    const totUtil=totVta?(totVta-totCos)/totVta*100:0;
+    return {fam,porMes,totUtil};
+  }).filter(f=>Object.values(f.porMes).some(Boolean));
+  const sorters={fam:(a,b)=>a.fam.localeCompare(b.fam,'es'),util:(a,b)=>a.totUtil-b.totUtil};
+  const cmp=sorters[famAnualSortCol]||sorters.util;
+  filas.sort((a,b)=>famAnualSortDir==='asc'?cmp(a,b):-cmp(a,b));
+  const arrow=col=>famAnualSortCol===col?(famAnualSortDir==='asc'?' ▲':' ▼'):'';
+  const thCol=col=>famAnualSortCol===col?'var(--acc)':'var(--tx)';
+  const nMeses=mesesOrdenados.length;
+  const wMes=nMeses?(60/nMeses):8;
+  const cols=[{key:'fam',label:'FAMILIA',w:'18%',align:'left',sortable:true}]
+    .concat(mesesOrdenados.map(m=>({key:null,label:(MLBL[m]||m).toUpperCase(),w:`${wMes.toFixed(2)}%`,align:'right',sortable:false})))
+    .concat([{key:'util',label:'UTIL AÑO',w:'22%',align:'right',sortable:true}]);
+  const theadHtml=`<thead><tr style="border-bottom:1px solid var(--line2)">
+    ${cols.map(c=>`<th ${c.sortable?`data-col="${c.key}"`:''} style="padding:5px 6px;text-align:${c.align};font-weight:600;${c.sortable?'cursor:pointer;user-select:none;':''}position:sticky;top:0;background:var(--panel2);z-index:2;color:${c.sortable?thCol(c.key):'var(--tx)'}">${c.label}${c.sortable?arrow(c.key):''}</th>`).join('')}
+  </tr></thead>`;
+  const bodyHtml=filas.map(f=>{
+    const mesCells=mesesOrdenados.map(m=>{
+      const d=f.porMes[m];
+      if(!d)return `<td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;color:var(--mut2)">—</td>`;
+      return `<td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace">${d.pct.toFixed(0)}%</td>`;
+    }).join('');
+    return `<tr style="border-bottom:1px solid var(--line)">
+      <td style="padding:6px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600">${f.fam}</td>
+      ${mesCells}
+      <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${utilColor(f.totUtil)}">${f.totUtil.toFixed(0)}%</td>
+    </tr>`;
+  }).join('')||`<tr><td colspan="${cols.length}" style="padding:8px;font-size:12px;color:var(--mut)">Sin datos</td></tr>`;
+  wrap.innerHTML=`<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+    <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
+    ${theadHtml}
+    <tbody>${bodyHtml}</tbody>
+  </table>`;
+  wrap.querySelectorAll('th[data-col]').forEach(th=>{
+    th.onclick=()=>{
+      const col=th.dataset.col;
+      if(famAnualSortCol===col){ famAnualSortDir=famAnualSortDir==='asc'?'desc':'asc'; } else { famAnualSortCol=col; famAnualSortDir='asc'; }
+      renderUtilidadAnualFamilias();
+    };
+  });
+}
 </script>
 </body>
 </html>
@@ -2816,6 +2941,12 @@ function renderUtilidadClientes(){
 
 <!-- 110 - Dashboard ventas REM 2026 - Objetivo mensual basado en venta sin NDCs: el usuario preguntó (25/08/2026) si la tarjeta "Objetivo mensual" comparaba contra el total con NDCs o sin NDCs; se confirmó que usaba totalVtaNeto (con el neto de Notas de Crédito/Débito ya descontado, mismo importe que "Venta activa · con NDCs") y el usuario pidió cambiarlo para que se base en la venta SIN NDCs (bruta, mismo importe que "Venta activa · sin NDCs"). Cambio: en render(), la variable "objMesVta" pasa de "mesFilter?totalVtaNeto:(...vta DATA...+ndcNetForMonth(...).net)" a "mesFilter?totalVta:(...vta DATA... sin sumar nada de NDC)" — se usa totalVta (la venta activa sin Tránsito, calculada ANTES de sumarle el ajuste de NDC, ya existente en render(), sin cálculo nuevo) para cuando hay un mes seleccionado, y para la vista de año completo (sin mes seleccionado) se quita por completo el término "+ndcNetForMonth(objMesKey,{ignoreFilters:true}).net" que antes se sumaba, dejando solo la suma bruta de "d.v" de DATA. El % de cumplimiento (objPct), el texto "Falta $X"/"✓ Objetivo alcanzado" (objRestante) y la barra de progreso se recalculan solos a partir de objMesVta, sin tocarlos directamente. Alcance: únicamente la tarjeta "Objetivo mensual" — no se tocó el objetivo de los gauges "Cumplimiento por fábrica" (GAUGE_OBJETIVOS/ORIG_AGG), que son un cálculo completamente aparte y no fueron parte de lo pedido. Verificado por lectura de código y con un chequeo de sintaxis completo del archivo con Node; no requiere datos en vivo para confirmar el cambio porque es un simple reemplazo de qué variable se usa (totalVta en vez de totalVtaNeto), ambas ya calculadas y verificadas en cambios anteriores. Pedido 25/08/2026. -->
 <!-- - breve descripcion de lo hecho: la tarjeta "Objetivo mensual" ahora compara el avance del mes contra la venta SIN descontar Notas de Crédito/Débito (antes comparaba contra la venta neta, ya con esas notas descontadas) — el objetivo (2.500 MM) no cambia, solo el importe de venta con el que se lo compara, para que sea consistente con la tarjeta "Venta activa · sin NDCs". -->
+
+<!-- 111 - Dashboard ventas REM 2026 - Utilidad anual por familias de productos: pedido del usuario para agregar una sección nueva "Utilidad anual por familias de productos", justo debajo de "Utilidad clientes", con el mismo formato/mecánica que "Utilidad anual por comercial" del tablero "Comerciales Seguimiento" (archivo "08 - Comerciales Seguimiento - orden secciones utilidad anual arriba.html", adjuntado por el usuario como modelo de estilo y funcionamiento). Definición de "familia" aclarada con el usuario tras varias idas y vueltas (multiple choice + respuesta libre, 25/08/2026): NO se basa en archivos locales de la carpeta de trabajo (se descartó explícitamente "Objetivos por familia.xlsx", que tiene una taxonomía FABRICA+FAMILIA distinta y sin objetivos completados) ni en RUBRO; se basa en la columna FAMILIA (columna Q) de la solapa LISTADO PRODUCTOS del Google Sheets EN VIVO — confirmado leyendo esa solapa en vivo (gid=1314968626) con fetch directo, la columna Q es efectivamente FAMILIA. Esa columna tiene ~104 valores distintos, de los cuales 3 son placeholders de carga incompleta del ERP, no familias comerciales reales: "-" (1812 productos), "Z_RESTRINGIDO" (1595) y "REVISAR FAMILIA" (49); a pedido explícito del usuario, esos 3 valores (y los productos sin FAMILIA cargada) NO aparecen en la tabla nueva, ni agrupados en una fila aparte — se excluyen directamente. Implementación: (1) FAM_LOOKUP (nuevo, {CODIGO→FAMILIA}) se puebla en processProductRows() igual que PROD_LOOKUP (mismo fetch de LISTADO PRODUCTOS, sin solapa nueva). (2) FAM_ROWS (nuevo array, análogo a EJEC_ROWS: {mes,familia,emp,rub,vta,cos,estado}) se puebla dentro de processRawRows(), en el mismo bloque de 4 estados activos (Firmada/Ingresada/Reparto/Transito) donde ya se resuelve el código de producto (_pcode) para ORIGEN — se reutiliza ese mismo _pcode contra FAM_LOOKUP, y se descarta la fila si la familia es un placeholder (FAM_PLACEHOLDERS) o no tiene match. (3) Card nueva "#famAnualCard" en el HTML, ubicada exactamente debajo de "Utilidad clientes" (#cliCard) y antes de "Seguimiento comerciales" (#comCard). (4) Función nueva renderUtilidadAnualFamilias(), copia directa de la mecánica de renderUtilidadAnualComercial() del archivo modelo: tabla FIJA (no cambia con el filtro de Período, mismo texto de nota "fijo, no cambia con el filtro de período"), sí respeta Empresa/Rubro (empGrupoFilter/empFilter/rubFilter), solo considera remitos con estado==='Firmada' (igual que el modelo), columnas Ene→Ago (los meses que haya en MESES) + columna final "UTIL AÑO", ordenada por defecto de mayor a menor utilidad (famAnualSortCol='util', famAnualSortDir='desc'), headers clickeables para reordenar por cualquier columna, mismos 3 colores (rojo <40%, naranja <50%, verde ≥50%) que el resto del tablero. Se llama desde render(), justo después de renderUtilidadClientes(), para que reaccione a los filtros de Empresa/Rubro igual que el resto de las secciones. Verificado: (a) test aislado en Node con datos de muestra confirmando que los placeholders y los productos sin FAMILIA no aparecen, que solo se cuentan remitos Firmados (una fila Reparto de prueba quedó afuera), y que los % mensuales/anuales calculan correcto contra valores esperados a mano; (b) se confirmó en vivo, con un fetch directo a la solapa LISTADO PRODUCTOS del Google Sheets publicado, que la columna Q es FAMILIA y que los valores de ejemplo (ESTUCHES, MP VYMAT, VYMAT ROLLOS, "-", etc.) coinciden con los usados en el test; (c) chequeo de sintaxis completo del archivo con Node. Sin cambios en ninguna otra sección, cálculo o tarjeta existente. Pedido 25/08/2026. -->
+<!-- - breve descripcion de lo hecho: se agregó una sección nueva "Utilidad anual por familias de productos" (debajo de "Utilidad clientes"), con el mismo formato y funcionamiento que "Utilidad anual por comercial" del tablero de Comerciales Seguimiento que el usuario adjuntó como modelo: una fila por familia de producto (columna FAMILIA de LISTADO PRODUCTOS en el Google Sheets), una columna de % de utilidad por cada mes del año con datos, y una columna final "UTIL AÑO" ordenada de mayor a menor por defecto (se puede reordenar por cualquier columna haciendo clic en el encabezado). No se muestran los productos sin familia cargada ni los 3 valores placeholder de carga incompleta ("-", "Z_RESTRINGIDO", "REVISAR FAMILIA"), a pedido del usuario.  -->
+
+<!-- 112 - Dashboard ventas REM 2026 - Utilidad anual solo familias especificas del usuario: el usuario reportó (26/08/2026, con captura) que la sección nueva del archivo 111 estaba mal: en vez de mostrar únicamente la venta de un conjunto acotado de familias, mostraba TODAS las familias de la columna FAMILIA (salvo los 3 placeholders excluidos en ese archivo). Adjuntó una captura con la lista puntual de familias que sí quiere ver: ALUMINIO, BARMAN, FILM, MANTECA, STRETCH, VYMAT INTERC, VYMAT ROLLOS, FILM ECO, BARMAN BEIGE, BOBINAS ALUMAX, FILM REPUESTO — aclarando que los números de CODIGO de esa captura no importan, solo el texto de la FAMILIA. Antes de tocar código se preguntó explícitamente (multiple choice) si esas 11 familias eran la lista completa o si la captura estaba cortada con más familias abajo; el usuario confirmó "es la lista completa (11 familias)". Cambio: se reemplaza el criterio de exclusión (FAM_PLACEHOLDERS, que dejaba pasar todo salvo 3 valores puntuales) por una lista de inclusión cerrada, FAM_ALLOWLIST, con exactamente esas 11 familias (mismo texto/mayúsculas que la columna FAMILIA del Google Sheets, confirmados contra el fetch en vivo de la solapa LISTADO PRODUCTOS ya hecho en el archivo 111). En processRawRows(), la condición que empuja a FAM_ROWS pasa de "si tiene familia y no es placeholder" a "si tiene familia Y esa familia está en FAM_ALLOWLIST" — cualquier otra familia (incluidas las ~90 que antes sí se mostraban) ya no genera fila. Sin cambios en processProductRows() (FAM_LOOKUP sigue guardando la FAMILIA cruda tal cual, el filtro se aplica solo al acumular FAM_ROWS) ni en renderUtilidadAnualFamilias() (misma tabla/orden/colores, ahora con menos filas de datos de entrada). Verificado con un test aislado en Node confirmando que, de 5 productos de muestra con distintas familias, solo los 3 que están en FAM_ALLOWLIST (FILM, MANTECA, ALUMINIO) generan fila — el placeholder "-" y una familia real pero no pedida ("SERVILLETAS 33") quedan afuera igual que cualquier otra. También se corrió el chequeo de sintaxis completo del archivo con Node. Sin cambios en ninguna otra sección, cálculo o tarjeta existente. Pedido 26/08/2026. -->
+<!-- - breve descripcion de lo hecho: se corrigió la sección "Utilidad anual por familias de productos" para que muestre ÚNICAMENTE las 11 familias puntuales que pediste (ALUMINIO, BARMAN, FILM, MANTECA, STRETCH, VYMAT INTERC, VYMAT ROLLOS, FILM ECO, BARMAN BEIGE, BOBINAS ALUMAX, FILM REPUESTO), en vez de todas las familias de la columna FAMILIA del sheet como pasaba en la versión anterior. -->
 
 
 

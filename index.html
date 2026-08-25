@@ -484,12 +484,12 @@ svg{display:block;width:100%;overflow:visible}
 <!-- Utilidad negativa de clientes por familias de productos — pedido 26/08/2026, justo arriba
      de "Utilidad anual por familias de productos" (misma base: FAM_ROWS, FAM_ALLOWLIST, solo
      Firmados, todo el año Ene→Ago fijo, respeta Empresa/Rubro — confirmado con el usuario por
-     multiple choice). Una fila por familia con al menos 1 cliente <50% de utilidad ANUAL en
-     esa familia; clic en la familia despliega debajo el listado de esos clientes, con una
-     columna de % de utilidad por cada mes (ajuste 26/08/2026, antes solo mostraba el
-     importe totalizado del año) + columna final UTIL AÑO, ordenado peor a mejor. Una sola
-     familia desplegada a la vez (famNegActiveFamilia), mismo patrón de toggle que el resto
-     del tablero. -->
+     multiple choice). Una fila por familia con al menos 1 cliente <60% de utilidad ANUAL en
+     esa familia (umbral ajustado a 60% el 27/08/2026, antes 50%); clic en la familia
+     despliega debajo el listado de esos clientes, con una columna de % de utilidad por cada
+     mes + columna final UTIL AÑO, ordenado por defecto de MAYOR a menor UTIL AÑO (ajustado
+     27/08/2026, antes peor a mejor). Una sola familia desplegada a la vez
+     (famNegActiveFamilia), mismo patrón de toggle que el resto del tablero. -->
 <div class="card" style="margin-top:14px;margin-bottom:14px" id="famNegCard">
   <div class="c-head">
     <span class="c-title">Utilidad negativa de clientes por familias de productos</span>
@@ -1279,7 +1279,7 @@ const ORIG_AGG={};
 const ORIG_DAYAGG={}; // { ORIGEN: { MES: { DIA: vta } } } — para avance diario
 const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT','TERCEROS'];
 let famAnualSortCol='util'; let famAnualSortDir='desc'; // orden tabla "Utilidad anual por familias de productos"
-let famNegActiveFamilia=null; // familia con el listado de clientes <50% util desplegado (una sola a la vez) — "Utilidad negativa de clientes por familias de productos"
+let famNegActiveFamilia=null; // familia con el listado de clientes <60% util desplegado (una sola a la vez) — "Utilidad negativa de clientes por familias de productos"
 // Objetivos fijos mensuales por fábrica, provistos por gerencia (ya no se calculan por promedio/participación)
 const GAUGE_OBJETIVOS={BARMAN:400_000_000,GRAFICA:70_000_000,TUBOS:600_000_000,VYMAT:800_000_000,TERCEROS:450_000_000};
 
@@ -2883,11 +2883,11 @@ function renderUtilidadNegativaFamilias(){
       });
       const util=totVta-totCos; const pct=totVta?util/totVta*100:0;
       return {cliente,vta:totVta,cos:totCos,util,pct,porMes};
-    }).filter(c=>c.pct<50).sort((a,b)=>a.pct-b.pct); // peor a mejor, por UTIL AÑO
+    }).filter(c=>c.pct<60).sort((a,b)=>b.pct-a.pct); // pedido 27/08/2026: umbral 60% (antes 50%) y orden por defecto de mayor a menor (antes peor a mejor)
     return {fam,list};
   }).filter(f=>f.list.length>0);
-  familias.sort((a,b)=>b.list.length-a.list.length); // familia con más clientes <50% primero
-  if(note)note.textContent=`${familias.length} familia${familias.length===1?'':'s'} con clientes <50% util · Firmados · fijo (no cambia con el filtro de período)`;
+  familias.sort((a,b)=>b.list.length-a.list.length); // familia con más clientes <60% primero
+  if(note)note.textContent=`${familias.length} familia${familias.length===1?'':'s'} con clientes <60% util · Firmados · fijo (no cambia con el filtro de período)`;
   if(!familias.length){
     wrap.innerHTML=`<div style="padding:8px 4px;font-size:12px;color:var(--mut)">Sin clientes con utilidad menor a 50% en estas familias.</div>`;
     if(detWrap)detWrap.innerHTML='';
@@ -2900,7 +2900,7 @@ function renderUtilidadNegativaFamilias(){
     <colgroup><col style="width:70%"><col style="width:30%"></colgroup>
     <thead><tr style="border-bottom:1px solid var(--line2)">
       <th style="padding:6px 8px;font-size:11px;text-align:left;font-weight:600">FAMILIA</th>
-      <th style="padding:6px 8px;font-size:11px;text-align:right;font-weight:600">CLIENTES &lt;50%</th>
+      <th style="padding:6px 8px;font-size:11px;text-align:right;font-weight:600">CLIENTES &lt;60%</th>
     </tr></thead>
     <tbody>${familias.map(f=>{
       const on=famNegActiveFamilia===f.fam;
@@ -2944,7 +2944,7 @@ function renderUtilidadNegativaFamilias(){
     </tr>`;
   }).join('');
   detWrap.innerHTML=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line2)">
-    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${activa.fam} · ${activa.list.length.toLocaleString('es-AR')} clientes &lt;50% util (UTIL AÑO) · % de utilidad por mes</div>
+    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${activa.fam} · ${activa.list.length.toLocaleString('es-AR')} clientes &lt;60% util (UTIL AÑO) · % de utilidad por mes · mayor a menor</div>
     <div style="max-height:340px;overflow-y:auto">
       <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
         <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
@@ -3094,6 +3094,9 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 114 - Dashboard ventas REM 2026 - Utilidad negativa clientes con desglose mensual: el usuario reportó (26/08/2026) que al listado de clientes del archivo 113 le faltaba ver los meses del año — solo mostraba el importe totalizado (VENTA|COSTO|UTIL|UTIL%), y pidió poder ver cómo viene mes a mes, "sería lo ideal". Cambio: el criterio para DECIDIR qué clientes aparecen sigue siendo el mismo que en el archivo 113 (% de utilidad ANUAL <50%, acumulando venta/costo de todos los meses con datos de esa familia+cliente, sin cambios), pero el LISTADO desplegado por familia ahora muestra una columna de % de utilidad por cada mes (Ene→Ago, los que haya en MESES) + una columna final UTIL AÑO coloreada — mismo formato de columnas mensuales que ya usa "Utilidad anual por familias de productos" (y "Utilidad anual por comercial" del tablero de Comerciales Seguimiento). Implementación: en renderUtilidadNegativaFamilias(), la estructura interna "grouped" pasa de {familia: {cliente: {vta,cos}}} a {familia: {cliente: {mes: {vta,cos}}}} (un nivel más de anidamiento, agregando "mes" al agrupador, reutilizando el mismo d.mes que ya trae cada fila de FAM_ROWS); para cada cliente se calcula un "porMes" (igual patrón que renderUtilidadAnualFamilias: {pct} o null si ese mes no tuvo venta) además del total anual (vta/cos/util/pct) que se sigue usando para el filtro <50% y el orden peor-a-mejor. La tabla de detalle (antes CLIENTE|VENTA|COSTO|UTIL|UTIL%) pasa a CLIENTE|<una columna por mes con el % coloreado>|UTIL AÑO (coloreada), con "—" en los meses sin venta para ese cliente en esa familia. Sin cambios en la tabla resumen de arriba (FAMILIA + CLIENTES <50%, mismo criterio de qué familias aparecen) ni en "Utilidad anual por familias de productos". Verificado con un test aislado en Node con un cliente de muestra que vende en 2 de 3 meses dentro de una familia: confirma que el % de cada mes con venta se calcula correcto, que el mes sin venta queda en null (se muestra "—"), que el % ANUAL sigue siendo el acumulado de todos los meses (no un promedio de los % mensuales) y que un cliente con 70% de utilidad anual sigue sin aparecer en el listado. También se corrió el chequeo de sintaxis completo del archivo con Node. Sin cambios en ninguna otra sección, cálculo o tarjeta existente. Pedido 26/08/2026. -->
 <!-- - breve descripcion de lo hecho: el listado de clientes que se despliega al hacer clic en una familia (dentro de "Utilidad negativa de clientes por familias de productos") ahora muestra el % de utilidad de cada cliente MES A MES (Ene→Ago), además del total anual al final — antes solo mostraba el importe totalizado del año completo. Qué clientes aparecen y en qué orden no cambió (sigue siendo por % de utilidad anual, de peor a mejor). -->
+
+<!-- 115 - Dashboard ventas REM 2026 - Utilidad negativa clientes umbral 60pct y orden desc: 2 ajustes puntuales pedidos por el usuario (27/08/2026) sobre "Utilidad negativa de clientes por familias de productos" (archivo 114), sin tocar ninguna otra sección — en particular, NO se tocó "Utilidad clientes" (la tabla general de más arriba), que sigue con su umbral de 50% sin cambios, porque el pedido del usuario vino en el contexto puntual de esta sección de familias. (1) Umbral: el criterio para que un cliente aparezca en el listado de una familia pasa de "% de utilidad ANUAL <50%" a "<60%" — en renderUtilidadNegativaFamilias(), el filtro cambia de ".filter(c=>c.pct<50)" a ".filter(c=>c.pct<60)"; los colores (rojo <40%, naranja <50%, verde ≥50%) NO se tocaron, así que ahora pueden aparecer en el listado clientes con el punto/número en verde (50-59,9%) — es intencional, el usuario pidió ampliar qué clientes se ven, no cambiar la escala de colores. (2) Orden por defecto: el listado de clientes de una familia pasa de ordenarse peor a mejor (".sort((a,b)=>a.pct-b.pct)") a mejor a peor, de MAYOR a menor UTIL AÑO (".sort((a,b)=>b.pct-a.pct)"), tal cual lo pidió el usuario. La tabla resumen de arriba (FAMILIA + CLIENTES <60%, cuántas familias aparecen) sigue ordenada por cantidad de clientes de mayor a menor, sin cambios — el pedido de "mayor a menor" era específicamente sobre el listado de clientes que se despliega, no sobre esa tabla resumen. Se actualizaron también las etiquetas visibles (encabezado de columna "CLIENTES <60%", nota "clientes <60% util", nota del detalle "mayor a menor"). Verificado con un test aislado en Node con 3 clientes de muestra (10%, 55% y 70% de utilidad): confirma que el de 55% ahora SÍ aparece (antes no entraba con el umbral de 50%) y el de 70% sigue sin aparecer, y que el orden resultante queda de mayor a menor (55% primero, 10% después). También se corrió el chequeo de sintaxis completo del archivo con Node. Sin cambios en "Utilidad anual por familias de productos", "Utilidad clientes", "Utilidad negativa" (la de arriba) ni en ninguna otra sección. Pedido 27/08/2026. -->
+<!-- - breve descripcion de lo hecho: en "Utilidad negativa de clientes por familias de productos", el umbral para que un cliente aparezca pasa de menor a 50% de utilidad a menor a 60%, y el listado de clientes que se despliega al hacer clic en una familia ahora se ordena por defecto de mayor a menor utilidad del año (antes de peor a mejor). No se tocó la tabla general "Utilidad clientes" de más arriba, que sigue con el umbral de 50% de siempre. -->
 
 
 

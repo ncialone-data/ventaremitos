@@ -481,6 +481,24 @@ svg{display:block;width:100%;overflow:visible}
   </div>
 </div>
 
+<!-- Utilidad negativa de clientes por familias de productos — pedido 26/08/2026, justo arriba
+     de "Utilidad anual por familias de productos" (misma base: FAM_ROWS, FAM_ALLOWLIST, solo
+     Firmados, todo el año Ene→Ago fijo, respeta Empresa/Rubro — confirmado con el usuario por
+     multiple choice). Una fila por familia con al menos 1 cliente <50% de utilidad ANUAL en
+     esa familia; clic en la familia despliega debajo el listado de esos clientes, con una
+     columna de % de utilidad por cada mes (ajuste 26/08/2026, antes solo mostraba el
+     importe totalizado del año) + columna final UTIL AÑO, ordenado peor a mejor. Una sola
+     familia desplegada a la vez (famNegActiveFamilia), mismo patrón de toggle que el resto
+     del tablero. -->
+<div class="card" style="margin-top:14px;margin-bottom:14px" id="famNegCard">
+  <div class="c-head">
+    <span class="c-title">Utilidad negativa de clientes por familias de productos</span>
+    <span class="c-note" id="famNegNote"></span>
+  </div>
+  <div id="famNegWrap"></div>
+  <div id="famNegDetalleWrap"></div>
+</div>
+
 <!-- Utilidad anual por familias de productos — pedido 25/08/2026. Mismo estilo/mecánica que
      "Utilidad anual por comercial" del tablero de Comerciales Seguimiento (archivo adjuntado
      por el usuario como modelo): tabla fija Ene→Ago (no cambia con el filtro de Período), sí
@@ -749,6 +767,7 @@ function render(){
   if(PEND_RAW)calcPendientesFiltered();
   renderUtilidadNegativa();
   renderUtilidadClientes();
+  renderUtilidadNegativaFamilias();
   renderUtilidadAnualFamilias();
   renderComerciales();
   renderRemitosPorComercial();
@@ -1115,7 +1134,9 @@ function processRawRows(rawRows, sourceName) {
       // en esa lista queda afuera de la tabla, no solo los placeholders.
       const _fam=FAM_LOOKUP[_pcode];
       if(_fam&&FAM_ALLOWLIST.has(_fam)){
-        FAM_ROWS.push({mes,familia:_fam,emp,rub,vta,cos,estado});
+        // rawcli agregado 26/08/2026 (antes no se guardaba en FAM_ROWS) para poder armar
+        // "Utilidad negativa de clientes por familias de productos" — clientes por familia.
+        FAM_ROWS.push({mes,familia:_fam,emp,rub,vta,cos,estado,rawcli:_rawcli});
       }
     }
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
@@ -1258,6 +1279,7 @@ const ORIG_AGG={};
 const ORIG_DAYAGG={}; // { ORIGEN: { MES: { DIA: vta } } } — para avance diario
 const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT','TERCEROS'];
 let famAnualSortCol='util'; let famAnualSortDir='desc'; // orden tabla "Utilidad anual por familias de productos"
+let famNegActiveFamilia=null; // familia con el listado de clientes <50% util desplegado (una sola a la vez) — "Utilidad negativa de clientes por familias de productos"
 // Objetivos fijos mensuales por fábrica, provistos por gerencia (ya no se calculan por promedio/participación)
 const GAUGE_OBJETIVOS={BARMAN:400_000_000,GRAFICA:70_000_000,TUBOS:600_000_000,VYMAT:800_000_000,TERCEROS:450_000_000};
 
@@ -2814,6 +2836,125 @@ function renderUtilidadClientes(){
   tbody.appendChild(totRow);
 }
 
+// Utilidad negativa de clientes por familias de productos — pedido 26/08/2026, ajustado
+// 26/08/2026 para agregar desglose MES A MES en el listado de clientes (antes solo mostraba
+// el importe totalizado del año, y el usuario pidió poder ver cómo viene mes a mes, igual
+// que "Utilidad anual por familias de productos"). Misma base de datos que esa tabla
+// (FAM_ROWS, FAM_ALLOWLIST, solo Firmados, fijo Ene→Ago sin importar el filtro de Período,
+// respeta Empresa/Rubro — confirmado con el usuario por multiple choice el 26/08). Para cada
+// una de las 11 familias, agrupa por CLIENTE (rawcli tal cual, sin limpiar el código — mismo
+// criterio que "Utilidad clientes" de arriba) Y POR MES, calcula el % de utilidad de CADA MES
+// y también el % ANUAL (venta/costo acumulados de todos los meses) — el criterio para decidir
+// si un cliente aparece sigue siendo el % ANUAL <50% (sin cambios respecto a la versión
+// anterior), pero ahora el listado desplegado muestra una columna por mes además del total.
+// Clic en una familia despliega debajo el listado de esos clientes (peor a mejor, por UTIL
+// AÑO); una sola familia desplegada a la vez (famNegActiveFamilia).
+function renderUtilidadNegativaFamilias(){
+  const wrap=document.getElementById('famNegWrap');
+  const note=document.getElementById('famNegNote');
+  const detWrap=document.getElementById('famNegDetalleWrap');
+  if(!wrap)return;
+  if(!MESES.length){ wrap.innerHTML=''; if(note)note.textContent=''; if(detWrap)detWrap.innerHTML=''; return; }
+  const passFE=d=>(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp))
+    &&(!empFilter||d.emp===empFilter)
+    &&(!rubFilter||d.rub===rubFilter);
+  const rowsFirm=FAM_ROWS.filter(d=>d.estado==='Firmada'&&passFE(d));
+  const mesesOrdenados=[...MESES].sort();
+  // grouped[familia][cliente][mes] = {vta,cos}
+  const grouped={};
+  rowsFirm.forEach(d=>{
+    const cliKey=d.rawcli||'(sin cliente)';
+    if(!grouped[d.familia])grouped[d.familia]={};
+    if(!grouped[d.familia][cliKey])grouped[d.familia][cliKey]={};
+    if(!grouped[d.familia][cliKey][d.mes])grouped[d.familia][cliKey][d.mes]={vta:0,cos:0};
+    grouped[d.familia][cliKey][d.mes].vta+=d.vta;
+    grouped[d.familia][cliKey][d.mes].cos+=d.cos;
+  });
+  const dotC=pct=>pct<0?'#f87171':pct<40?'#f87171':pct<50?'#d97706':'#4ade80';
+  const _fmt=n=>Math.round(n).toLocaleString('es-AR');
+  let familias=Object.entries(grouped).map(([fam,clientes])=>{
+    const list=Object.entries(clientes).map(([cliente,porMesRaw])=>{
+      let totVta=0,totCos=0;
+      const porMes={};
+      mesesOrdenados.forEach(m=>{
+        const d=porMesRaw[m];
+        if(d&&d.vta){ porMes[m]={pct:(d.vta-d.cos)/d.vta*100}; totVta+=d.vta; totCos+=d.cos; }
+        else porMes[m]=null;
+      });
+      const util=totVta-totCos; const pct=totVta?util/totVta*100:0;
+      return {cliente,vta:totVta,cos:totCos,util,pct,porMes};
+    }).filter(c=>c.pct<50).sort((a,b)=>a.pct-b.pct); // peor a mejor, por UTIL AÑO
+    return {fam,list};
+  }).filter(f=>f.list.length>0);
+  familias.sort((a,b)=>b.list.length-a.list.length); // familia con más clientes <50% primero
+  if(note)note.textContent=`${familias.length} familia${familias.length===1?'':'s'} con clientes <50% util · Firmados · fijo (no cambia con el filtro de período)`;
+  if(!familias.length){
+    wrap.innerHTML=`<div style="padding:8px 4px;font-size:12px;color:var(--mut)">Sin clientes con utilidad menor a 50% en estas familias.</div>`;
+    if(detWrap)detWrap.innerHTML='';
+    famNegActiveFamilia=null;
+    return;
+  }
+  // Si la familia activa dejó de tener clientes <50% (por un cambio de filtro), se cierra sola.
+  if(famNegActiveFamilia&&!familias.some(f=>f.fam===famNegActiveFamilia))famNegActiveFamilia=null;
+  wrap.innerHTML=`<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px">
+    <colgroup><col style="width:70%"><col style="width:30%"></colgroup>
+    <thead><tr style="border-bottom:1px solid var(--line2)">
+      <th style="padding:6px 8px;font-size:11px;text-align:left;font-weight:600">FAMILIA</th>
+      <th style="padding:6px 8px;font-size:11px;text-align:right;font-weight:600">CLIENTES &lt;50%</th>
+    </tr></thead>
+    <tbody>${familias.map(f=>{
+      const on=famNegActiveFamilia===f.fam;
+      return `<tr data-fam="${f.fam}" style="cursor:pointer;border-bottom:1px solid var(--line);border-left:3px solid ${on?'var(--acc)':'transparent'};${on?'background:rgba(96,165,250,.10)':''}">
+      <td style="padding:6px 8px;font-weight:600">${f.fam}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#f87171;font-weight:700">${f.list.length.toLocaleString('es-AR')}</td>
+    </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+  wrap.querySelectorAll('tr[data-fam]').forEach(tr=>{
+    tr.onclick=()=>{
+      const fam=tr.dataset.fam;
+      famNegActiveFamilia=(famNegActiveFamilia===fam)?null:fam;
+      renderUtilidadNegativaFamilias();
+    };
+  });
+  if(!detWrap)return;
+  if(!famNegActiveFamilia){ detWrap.innerHTML=''; return; }
+  const activa=familias.find(f=>f.fam===famNegActiveFamilia);
+  if(!activa){ detWrap.innerHTML=''; famNegActiveFamilia=null; return; }
+  // Detalle con desglose mensual — mismo estilo de columnas que "Utilidad anual por
+  // familias de productos" (una columna % por mes + columna final UTIL AÑO coloreada).
+  const nMeses=mesesOrdenados.length;
+  const wMes=nMeses?(45/nMeses):8;
+  const cols=[{label:'CLIENTE',w:'25%',align:'left'}]
+    .concat(mesesOrdenados.map(m=>({label:(MLBL[m]||m).toUpperCase(),w:`${wMes.toFixed(2)}%`,align:'right'})))
+    .concat([{label:'UTIL AÑO',w:'20%',align:'right'}]);
+  const theadHtml=`<thead><tr style="border-bottom:1px solid var(--line2)">
+    ${cols.map(c=>`<th style="padding:5px 6px;font-size:11px;text-align:${c.align};font-weight:600;position:sticky;top:0;background:var(--panel2)">${c.label}</th>`).join('')}
+  </tr></thead>`;
+  const bodyHtml=activa.list.map(c=>{
+    const mesCells=mesesOrdenados.map(m=>{
+      const d=c.porMes[m];
+      if(!d)return `<td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;color:var(--mut2)">—</td>`;
+      return `<td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${dotC(d.pct)}">${d.pct.toFixed(0)}%</td>`;
+    }).join('');
+    return `<tr style="border-bottom:1px solid var(--line)">
+      <td style="padding:5px 8px;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.cliente}</td>
+      ${mesCells}
+      <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${dotC(c.pct)}">${c.pct.toFixed(0)}%</td>
+    </tr>`;
+  }).join('');
+  detWrap.innerHTML=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line2)">
+    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${activa.fam} · ${activa.list.length.toLocaleString('es-AR')} clientes &lt;50% util (UTIL AÑO) · % de utilidad por mes</div>
+    <div style="max-height:340px;overflow-y:auto">
+      <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+        <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
+        ${theadHtml}
+        <tbody>${bodyHtml}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
 // Tabla fija de utilidad % mes a mes por FAMILIA de producto (columna Q de LISTADO PRODUCTOS,
 // vía FAM_ROWS), para el año completo (Ene→Ago, o los meses que haya cargados). A propósito
 // NO usa mesFilter (no cambia con el filtro de Período); sí respeta Empresa y Rubro. Mismo
@@ -2947,6 +3088,12 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 112 - Dashboard ventas REM 2026 - Utilidad anual solo familias especificas del usuario: el usuario reportó (26/08/2026, con captura) que la sección nueva del archivo 111 estaba mal: en vez de mostrar únicamente la venta de un conjunto acotado de familias, mostraba TODAS las familias de la columna FAMILIA (salvo los 3 placeholders excluidos en ese archivo). Adjuntó una captura con la lista puntual de familias que sí quiere ver: ALUMINIO, BARMAN, FILM, MANTECA, STRETCH, VYMAT INTERC, VYMAT ROLLOS, FILM ECO, BARMAN BEIGE, BOBINAS ALUMAX, FILM REPUESTO — aclarando que los números de CODIGO de esa captura no importan, solo el texto de la FAMILIA. Antes de tocar código se preguntó explícitamente (multiple choice) si esas 11 familias eran la lista completa o si la captura estaba cortada con más familias abajo; el usuario confirmó "es la lista completa (11 familias)". Cambio: se reemplaza el criterio de exclusión (FAM_PLACEHOLDERS, que dejaba pasar todo salvo 3 valores puntuales) por una lista de inclusión cerrada, FAM_ALLOWLIST, con exactamente esas 11 familias (mismo texto/mayúsculas que la columna FAMILIA del Google Sheets, confirmados contra el fetch en vivo de la solapa LISTADO PRODUCTOS ya hecho en el archivo 111). En processRawRows(), la condición que empuja a FAM_ROWS pasa de "si tiene familia y no es placeholder" a "si tiene familia Y esa familia está en FAM_ALLOWLIST" — cualquier otra familia (incluidas las ~90 que antes sí se mostraban) ya no genera fila. Sin cambios en processProductRows() (FAM_LOOKUP sigue guardando la FAMILIA cruda tal cual, el filtro se aplica solo al acumular FAM_ROWS) ni en renderUtilidadAnualFamilias() (misma tabla/orden/colores, ahora con menos filas de datos de entrada). Verificado con un test aislado en Node confirmando que, de 5 productos de muestra con distintas familias, solo los 3 que están en FAM_ALLOWLIST (FILM, MANTECA, ALUMINIO) generan fila — el placeholder "-" y una familia real pero no pedida ("SERVILLETAS 33") quedan afuera igual que cualquier otra. También se corrió el chequeo de sintaxis completo del archivo con Node. Sin cambios en ninguna otra sección, cálculo o tarjeta existente. Pedido 26/08/2026. -->
 <!-- - breve descripcion de lo hecho: se corrigió la sección "Utilidad anual por familias de productos" para que muestre ÚNICAMENTE las 11 familias puntuales que pediste (ALUMINIO, BARMAN, FILM, MANTECA, STRETCH, VYMAT INTERC, VYMAT ROLLOS, FILM ECO, BARMAN BEIGE, BOBINAS ALUMAX, FILM REPUESTO), en vez de todas las familias de la columna FAMILIA del sheet como pasaba en la versión anterior. -->
+
+<!-- 113 - Dashboard ventas REM 2026 - Utilidad negativa de clientes por familias de productos: pedido del usuario (26/08/2026) para agregar una tabla nueva, justo ARRIBA de "Utilidad anual por familias de productos", que muestre la utilidad de los clientes por debajo del 50% dentro de esas mismas 11 familias, con clic en una familia para desplegar el listado de clientes. Antes de tocar código se preguntó por multiple choice (2 preguntas) para resolver 2 ambigüedades reales: (1) período — ¿mes visible como "Utilidad clientes" de arriba, o fijo todo el año como "Utilidad anual por familias" de abajo? El usuario eligió FIJO, todo el año (Ene→Ago), igual que la tabla de familias. (2) qué remitos contar — ¿los 4 estados activos (como "Utilidad clientes", que incluye Tránsito) o solo Firmados (como "Utilidad anual por familias"/"Utilidad anual por comercial")? El usuario eligió SOLO FIRMADOS. Con esas 2 respuestas, la nueva tabla queda con la MISMA base de datos que "Utilidad anual por familias de productos" (FAM_ROWS filtrado a estado==='Firmada', FAM_ALLOWLIST, respeta empGrupoFilter/empFilter/rubFilter, ignora mesFilter). Implementación: (1) FAM_ROWS ahora también guarda "rawcli" (antes solo mes/familia/emp/rub/vta/cos/estado) — se reusa _rawcli, ya calculado en ese mismo punto de processRawRows() para EJEC_ROWS/CLI_AGG, sin cálculo nuevo. (2) Card nueva "#famNegCard" ubicada arriba de "#famAnualCard" (entre "Utilidad clientes" y "Utilidad anual por familias de productos"), con dos contenedores: #famNegWrap (tabla resumen, una fila por familia con al menos 1 cliente <50%, columna FAMILIA + CLIENTES <50% en rojo, ordenada por esa cantidad de mayor a menor) y #famNegDetalleWrap (listado de clientes de la familia clickeada, debajo de la tabla resumen). (3) Función nueva renderUtilidadNegativaFamilias(): agrupa FAM_ROWS (solo Firmados, respetando filtros) por familia→cliente (rawcli SIN limpiar código, mismo criterio que "Utilidad clientes"), suma venta/costo de TODOS los meses con datos para ese cliente dentro de esa familia, calcula % de utilidad, filtra a <50% y ordena de peor a mejor — mismo umbral, colores (rojo <40%, naranja <50%, verde ≥50%) y columnas (CLIENTE|VENTA|COSTO|UTIL|UTIL%) que "Utilidad clientes". Una sola familia desplegada a la vez (famNegActiveFamilia, mismo patrón de toggle que el resto del tablero); si un cambio de filtro hace que la familia activa deje de tener clientes <50%, se cierra sola. Familias sin ningún cliente <50% no aparecen en la tabla resumen. Se llama desde render(), justo antes de renderUtilidadAnualFamilias(). Verificado con un test aislado en Node con datos de muestra: un cliente con ventas en 2 meses distintos de la misma familia se suma correctamente (venta anual acumulada, no por mes), una fila en estado Reparto queda excluida (solo Firmados), un cliente con 70% de utilidad NO aparece en el listado de su familia, y una familia cuyo único cliente tiene 60% no aparece en la tabla resumen. También se corrió el chequeo de sintaxis completo del archivo con Node. Sin cambios en "Utilidad anual por familias de productos" ni en ninguna otra sección existente. Pedido 26/08/2026. -->
+<!-- - breve descripcion de lo hecho: se agregó una tabla nueva "Utilidad negativa de clientes por familias de productos" (justo arriba de "Utilidad anual por familias de productos"), que lista las familias con al menos un cliente por debajo del 50% de utilidad (acumulado todo el año, solo remitos Firmados) y la cantidad de esos clientes; al hacer clic en una familia se despliega debajo el listado completo de esos clientes con venta, costo, utilidad y % (peor a mejor), igual formato que "Utilidad clientes" de más arriba. -->
+
+<!-- 114 - Dashboard ventas REM 2026 - Utilidad negativa clientes con desglose mensual: el usuario reportó (26/08/2026) que al listado de clientes del archivo 113 le faltaba ver los meses del año — solo mostraba el importe totalizado (VENTA|COSTO|UTIL|UTIL%), y pidió poder ver cómo viene mes a mes, "sería lo ideal". Cambio: el criterio para DECIDIR qué clientes aparecen sigue siendo el mismo que en el archivo 113 (% de utilidad ANUAL <50%, acumulando venta/costo de todos los meses con datos de esa familia+cliente, sin cambios), pero el LISTADO desplegado por familia ahora muestra una columna de % de utilidad por cada mes (Ene→Ago, los que haya en MESES) + una columna final UTIL AÑO coloreada — mismo formato de columnas mensuales que ya usa "Utilidad anual por familias de productos" (y "Utilidad anual por comercial" del tablero de Comerciales Seguimiento). Implementación: en renderUtilidadNegativaFamilias(), la estructura interna "grouped" pasa de {familia: {cliente: {vta,cos}}} a {familia: {cliente: {mes: {vta,cos}}}} (un nivel más de anidamiento, agregando "mes" al agrupador, reutilizando el mismo d.mes que ya trae cada fila de FAM_ROWS); para cada cliente se calcula un "porMes" (igual patrón que renderUtilidadAnualFamilias: {pct} o null si ese mes no tuvo venta) además del total anual (vta/cos/util/pct) que se sigue usando para el filtro <50% y el orden peor-a-mejor. La tabla de detalle (antes CLIENTE|VENTA|COSTO|UTIL|UTIL%) pasa a CLIENTE|<una columna por mes con el % coloreado>|UTIL AÑO (coloreada), con "—" en los meses sin venta para ese cliente en esa familia. Sin cambios en la tabla resumen de arriba (FAMILIA + CLIENTES <50%, mismo criterio de qué familias aparecen) ni en "Utilidad anual por familias de productos". Verificado con un test aislado en Node con un cliente de muestra que vende en 2 de 3 meses dentro de una familia: confirma que el % de cada mes con venta se calcula correcto, que el mes sin venta queda en null (se muestra "—"), que el % ANUAL sigue siendo el acumulado de todos los meses (no un promedio de los % mensuales) y que un cliente con 70% de utilidad anual sigue sin aparecer en el listado. También se corrió el chequeo de sintaxis completo del archivo con Node. Sin cambios en ninguna otra sección, cálculo o tarjeta existente. Pedido 26/08/2026. -->
+<!-- - breve descripcion de lo hecho: el listado de clientes que se despliega al hacer clic en una familia (dentro de "Utilidad negativa de clientes por familias de productos") ahora muestra el % de utilidad de cada cliente MES A MES (Ene→Ago), además del total anual al final — antes solo mostraba el importe totalizado del año completo. Qué clientes aparecen y en qué orden no cambió (sigue siendo por % de utilidad anual, de peor a mejor). -->
 
 
 

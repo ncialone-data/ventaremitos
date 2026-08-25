@@ -113,8 +113,8 @@ header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-be
 .xlsx-btn:hover{background:var(--acc-d)}
 .xlsx-btn.loading{opacity:.6;pointer-events:none}
 .file-status{font-size:12px;color:var(--mut)}
-.kpis{display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:16px}
-.kpi .k-val.full{font-size:clamp(16px,2.0vw,28px);line-height:1.05}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;margin-bottom:16px;align-items:stretch}
+.kpi .k-val.full{font-size:clamp(15px,1.6vw,20px);line-height:1.15;word-break:break-word}
 .kpi-prog{margin-top:10px}
 .kpi-prog .prog-track{height:5px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;margin-top:4px}
 .kpi-prog .prog-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--acc),var(--acc-d));transition:width 1s cubic-bezier(.22,1,.36,1)}
@@ -129,10 +129,11 @@ body.light .mom-up{color:#2563eb}
 .mom-bar-fill.prev-bar{background:rgba(255,255,255,.22)}
 .mom-bar-amt{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--mut);text-align:right;white-space:nowrap}
 .kpi{background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--line);
-  border-radius:var(--r);padding:18px 20px;position:relative;overflow:hidden}
+  border-radius:var(--r);padding:18px 20px;position:relative;overflow:hidden;
+  display:flex;flex-direction:column}
 .kpi::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 60%,rgba(184,255,54,.05));pointer-events:none}
-.kpi .k-lbl{font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut2)}
-.kpi .k-val{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:clamp(22px,2.9vw,33px);margin-top:9px;letter-spacing:-.03em}
+.kpi .k-lbl{font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut2);min-height:2.1em;display:flex;align-items:flex-start}
+.kpi .k-val{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:clamp(20px,2.6vw,30px);margin-top:9px;letter-spacing:-.03em;word-break:break-word}
 .kpi.acc .k-val{color:var(--acc)}
 .kpi.mrg .k-val{color:var(--teal)}
 .kpi .k-sub{font-size:12px;color:var(--mut);margin-top:5px}
@@ -298,6 +299,7 @@ svg{display:block;width:100%;overflow:visible}
 </div>
 
 <div class="kpis" id="kpis"></div>
+<div id="kpiDetalleWrap"></div>
 
 <div class="card" style="margin-bottom:14px">
   <div class="c-head" style="margin-bottom:10px">
@@ -551,6 +553,9 @@ let ndcSortCol='importe'; // columna activa de orden en la tabla de detalle NDC
 let ndcSortDir='desc';    // 'asc' | 'desc'
 const TIPIF_BY_COMP={};   // comprobante (texto) -> {tipoCmp:'NCR'|'NDB', ...resultado de parsearObs()} — ver processTipifRows()
 let motivoActivo=null;    // motivo seleccionado en "Motivos resumen" (clic en una fila) — filtra "Lista detalle" a solo ese motivo; null = sin filtro
+// KPI superiores clickeables (Venta activa con/sin NDCs, Clientes únicos/nuevos) — pedido
+// 19/08/2026. Una sola tarjeta desplegada a la vez (mismo patrón que ndcActiveCard/pendActiveCard).
+let kpiActiveCard=null;   // 'ventaNdc' | 'ventaSinNdc' | 'cliUnicos' | 'cliNuevos' | null
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
@@ -581,26 +586,15 @@ function render(){
   const ndcAdjVenta=_mesesScopeVenta.reduce((s,m)=>s+ndcNetForMonth(m).net,0);
   const totalVtaNeto=totalVta+ndcAdjVenta;
   const margenAvg=totalVtaNeto>0?(totalVtaNeto-totalCos)/totalVtaNeto*100:0;
-  const clientes=new Set(
-    REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)
-      &&(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter))
-    .map(d=>d.rawcli)
-  ).size;
-  // Clientes nuevos: activos en el mes filtrado sin historial en meses anteriores
-  let clientesNuevos = null;
-  if(mesFilter){
-    const cliActual=new Set(
-      REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)
-        &&d.mes===mesFilter&&(!empFilter||d.emp===empFilter))
-      .map(d=>d.rawcli)
-    );
-    const cliAnteriores=new Set(
-      REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)
-        &&d.mes<mesFilter&&(!empFilter||d.emp===empFilter))
-      .map(d=>d.rawcli)
-    );
-    clientesNuevos=[...cliActual].filter(c=>!cliAnteriores.has(c)).length;
-  }
+  // Clientes únicos / nuevos — pedido 25/08/2026: antes se contaban por el string RAW de
+  // CLIENTE (código+nombre tal cual viene del sheet), lo que hacía que un mismo cliente real
+  // con varios códigos en el ERP (ej. sucursales) se contara varias veces, sin coincidir con
+  // el listado desplegable (que sí agrupa por nombre limpio, vía sc2()). Ahora ambos números
+  // salen de la MISMA función (computeKpiClientList, definida más abajo), así la tarjeta y el
+  // listado SIEMPRE van a coincidir exactamente. Ver comentario de este cambio al final del
+  // archivo para el detalle numérico verificado contra los datos reales de Ago-2026.
+  const clientes=computeKpiClientList('cliUnicos').length;
+  const clientesNuevos = mesFilter ? computeKpiClientList('cliNuevos').length : null;
   document.getElementById('scope').textContent=empGrupoFilter||empFilter||"Todas";
   document.getElementById('scope').style.color=(empGrupoFilter||empFilter)?'var(--teal)':"var(--teal)";
   document.getElementById('clearEmpBtn').classList.toggle('hide',!empFilter);
@@ -661,20 +655,38 @@ function render(){
     </div></div>`;
 
   // ── Render ────────────────────────────────────────────────────────────
+  // Las 4 tarjetas siguientes (Venta activa con NDCs, Venta activa sin NDCs, Clientes
+  // únicos, Clientes nuevos) son clickeables desde el pedido 19/08/2026: despliegan un
+  // listado de cliente + importe de mayor a menor — ver kpiActiveCard/renderKpiDetalle().
   document.getElementById('kpis').innerHTML=
-    `<div class="kpi acc"><div class="k-lbl">Venta activa</div>
+    `<div class="kpi acc pend-clickable" data-card="ventaNdc"><div class="k-lbl">Venta activa</div>
       <div class="k-val full">${fmtFull(totalVtaNeto)}</div>
       <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito · con NDCs</div></div>`+
+    // Tarjeta nueva — pedido 19/08/2026: misma "venta activa" (sin Tránsito) pero SIN
+    // descontar el neto de NDC, para poder comparar bruto vs. neto a simple vista. Usa
+    // totalVta (no totalVtaNeto), calculado más arriba antes de sumarle ndcAdjVenta.
+    `<div class="kpi acc pend-clickable" data-card="ventaSinNdc"><div class="k-lbl">Venta activa</div>
+      <div class="k-val full">${fmtFull(totalVta)}</div>
+      <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito · sin NDCs</div></div>`+
     objCard+momCard+
     `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
       <div class="k-val">${fmtPct(margenAvg)}</div>
       <div class="k-sub">$${fmtM(totalVtaNeto-totalCos)} neto</div></div>
-    <div class="kpi"><div class="k-lbl">Clientes únicos</div>
+    <div class="kpi pend-clickable" data-card="cliUnicos"><div class="k-lbl">Clientes únicos</div>
       <div class="k-val">${clientes.toLocaleString('es-AR')}</div>
       <div class="k-sub">en remitos activos</div></div>
-    <div class="kpi"><div class="k-lbl">Clientes nuevos</div>
+    <div class="kpi pend-clickable" data-card="cliNuevos"><div class="k-lbl">Clientes nuevos</div>
       <div class="k-val" style="color:var(--teal)">${clientesNuevos!==null?clientesNuevos.toLocaleString('es-AR'):'—'}</div>
       <div class="k-sub">${clientesNuevos!==null?'sin historial previo':'seleccioná un mes'}</div></div>`;
+  document.querySelectorAll('#kpis .kpi[data-card]').forEach(el=>{
+    el.classList.toggle('pend-card-on', el.dataset.card===kpiActiveCard);
+    el.onclick=()=>{
+      kpiActiveCard=(kpiActiveCard===el.dataset.card)?null:el.dataset.card;
+      document.querySelectorAll('#kpis .kpi[data-card]').forEach(x=>x.classList.toggle('pend-card-on', x.dataset.card===kpiActiveCard));
+      renderKpiDetalle();
+    };
+  });
+  renderKpiDetalle();
   // ── Tarjetas NDC (Notas de Crédito / Notas de Débito) — pedido 04/08/2026 ─────────────
   // Muestran cantidad + importe total del mes visible, con el mismo scope de empresa que
   // el resto del dashboard. skipRubroSafety:true porque estas tarjetas son informativas
@@ -1892,6 +1904,94 @@ function ndcNetForMonth(mes, opts){
   }), {...zero});
 }
 
+// ============================================================================
+// Listado "cliente + importe" de las 4 tarjetas KPI clickeables — pedido 19/08/2026
+// ============================================================================
+// Decisiones confirmadas con el usuario (multiple choice, 19/08/2026):
+//  - El importe de "Clientes únicos"/"Clientes nuevos" sale de la venta de remitos SIN
+//    NDC (misma base que ya usa el conteo de esas 2 tarjetas), no del neto con NDC.
+//  - Una sola tarjeta desplegada a la vez (mismo patrón que NDC/Pendientes).
+// Copia local de la función sc() de processRawRows() (le quita el código numérico inicial
+// al nombre de cliente) para poder usarla acá afuera sin duplicar processRawRows entero.
+function sc2(c){
+  const p=String(c||'').trim().split(' ');
+  return(/^\d+$/.test(p[0])?p.slice(1).join(' '):String(c||'').trim()).slice(0,40);
+}
+function computeKpiClientList(kind){
+  const ACTIVOS=['Firmada','Ingresada','Reparto'];
+  const R=rows(); // ya filtra mesFilter/empGrupoFilter/empFilter/rubFilter, igual que el resto de render()
+  const Rfirm=R.filter(d=>ACTIVOS.includes(d.e));
+  const map={};
+  Rfirm.forEach(d=>{ map[d.c]=(map[d.c]||0)+d.v; });
+  if(kind==='ventaNdc'){
+    // Sumar el neto de NDC por cliente, con el mismo criterio que ndcAdjVenta/ndcNetForMonth:
+    // no se aplica si hay rubFilter activo (la solapa NDC no tiene columna RUBRO).
+    if(!rubFilter){
+      const mesesScope=mesFilter?[mesFilter]:MESES;
+      [...NDC_DETAIL.ncr,...NDC_DETAIL.ndb].forEach(n=>{
+        if(!mesesScope.includes(n.mes)) return;
+        if(empGrupoFilter && !(EMP_GRUPOS[empGrupoFilter]||[]).includes(n.emp)) return;
+        if(empFilter && n.emp!==empFilter) return;
+        const key=sc2(n.cliente);
+        map[key]=(map[key]||0)+n.importe;
+      });
+    }
+  }
+  let list=Object.entries(map).map(([cliente,importe])=>({cliente,importe}));
+  if(kind==='cliNuevos'){
+    if(!mesFilter) return [];
+    const cliActual=new Set(
+      REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)&&d.mes===mesFilter&&(!empFilter||d.emp===empFilter))
+      .map(d=>sc2(d.rawcli))
+    );
+    const cliAnteriores=new Set(
+      REMS_RAW.filter(d=>ACTIVOS.includes(d.estado)&&d.mes<mesFilter&&(!empFilter||d.emp===empFilter))
+      .map(d=>sc2(d.rawcli))
+    );
+    list=list.filter(x=>cliActual.has(x.cliente)&&!cliAnteriores.has(x.cliente));
+  }
+  list.sort((a,b)=>b.importe-a.importe);
+  return list;
+}
+function renderKpiDetalle(){
+  const wrap=document.getElementById('kpiDetalleWrap');
+  if(!wrap) return;
+  if(!kpiActiveCard){ wrap.innerHTML=''; return; }
+  const TITULOS={
+    ventaNdc:'Venta activa · con NDCs', ventaSinNdc:'Venta activa · sin NDCs',
+    cliUnicos:'Clientes únicos', cliNuevos:'Clientes nuevos'
+  };
+  const titulo=TITULOS[kpiActiveCard]||'';
+  const list=computeKpiClientList(kpiActiveCard);
+  const periodoTxt=mesFilter?(MLBL[mesFilter]||mesFilter):'año completo';
+  if(!list.length){
+    wrap.innerHTML=`<div class="card" style="margin-top:0;margin-bottom:14px;padding:14px 20px">
+      <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">${titulo} · ${periodoTxt}</div>
+      <div style="font-size:12px;color:var(--mut)">Sin clientes para este período/filtro.</div>
+    </div>`;
+    return;
+  }
+  wrap.innerHTML=`<div class="card" style="margin-top:0;margin-bottom:14px">
+    <div class="c-head" style="margin-bottom:10px">
+      <span class="c-title">${titulo}</span>
+      <span class="c-note">${periodoTxt} · ${list.length.toLocaleString('es-AR')} clientes</span>
+    </div>
+    <div style="max-height:340px;overflow-y:auto">
+      <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+        <colgroup><col style="width:70%"><col style="width:30%"></colgroup>
+        <thead><tr style="border-bottom:1px solid var(--line2)">
+          <th style="padding:5px 8px;text-align:left;font-weight:600">CLIENTE</th>
+          <th style="padding:5px 8px;text-align:right;font-weight:600">IMPORTE</th>
+        </tr></thead>
+        <tbody>${list.map(x=>`<tr style="border-bottom:1px solid var(--line)">
+          <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${x.cliente||'(sin cliente)'}</td>
+          <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(x.importe)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
 // Tabla de detalle desplegable de las tarjetas NDC (Notas de Crédito / Notas de Débito) —
 // mismo patrón de interacción que "Pedidos pendientes de facturar" (togglePendDetalle /
 // renderPendientesDetalle): una sola tabla a la vez, clic en la misma tarjeta la cierra,
@@ -2702,7 +2802,15 @@ function renderUtilidadClientes(){
 <!-- - breve descripcion de lo hecho: se agregaron mensajes de diagnóstico en la consola del navegador (F12) para poder ver exactamente en qué paso se corta la carga de la solapa de tipificación (si el fetch falla, si la respuesta viene vacía, o si el CSV no tiene filas válidas), ya que ese fetch nunca muestra el error en pantalla y no había forma de saber qué estaba pasando. -->
 <!-- 105 - Dashboard ventas REM 2026 - fix venta activa desactualizada en el primer render: bug reportado por el usuario con 2 capturas comparando el mismo período ("Ago") en 2 momentos: al abrir el dashboard, "Venta activa" mostraba $373.132.712 (margen 44.8%, tarjetas de NDC en $0/0 notas); tras hacer clic en Jul y volver a Ago, se actualizaba a $352.313.458 (margen 41.6%, NDC en $20.819.254/15 notas) — la diferencia entre ambos números ($20.819.254) coincide exacto con el total de NDC que faltaba descontar. Causa raíz confirmada leyendo el código: processRawRows() dispara su propio render()/renderGauges()/renderGaugesDiario() al final de su propio cuerpo (línea ~1166-1168), pero en el handler de "Actualizar datos" ese llamado ocurre ANTES de que corran processNdcRows(rowsNdc) y processTipifRows(rowsTipif) (líneas ~2463-2481) — es decir, el primer pintado de la página lee NDC_MES_AGG/TIPIF_BY_COMP todavía vacíos, mostrando la venta SIN el descuento de NDC/NDB. No había ningún render() posterior a esos dos pasos, por lo que ese pintado desactualizado quedaba en pantalla hasta que el usuario tocaba cualquier filtro (cambiar de mes, empresa, rubro), lo cual disparaba un render() nuevo que sí leía los datos ya completos. Fix de 3 líneas: se agrega `render(); renderGauges(); renderGaugesDiario();` justo después de la línea que procesa pendientes (processPendientesRows), una vez que NDC y tipificación ya se mergearon en los datos — así el primer pintado que ve el usuario ya es el correcto, sin necesidad de tocar ningún filtro. Sin cambios de cálculo, de UI ni de ningún otro comportamiento: se trata pura y exclusivamente de repetir, en el momento correcto, llamadas a funciones que ya existían y ya se llamaban antes (una vez, desactualizadas) en cada carga. Verificado con `node --check` sobre el bloque <script> extraído y con diff contra el archivo 104 (única diferencia: las 3 líneas agregadas + este comentario). Pedido 12/08/2026, tras diagnóstico explicado en el chat sin tocar código. -->
 <!-- - breve descripcion de lo hecho: se corrigió que, al abrir el dashboard, "Venta activa" (y las tarjetas de NDC/NDB) se mostraran momentáneamente SIN el descuento de Notas de Crédito/Débito hasta que el usuario tocara cualquier filtro; ahora ese descuento ya se aplica desde el primer pintado, sin necesidad de hacer clic en nada. -->
+<!-- 106 - Dashboard ventas REM 2026 - tarjeta venta activa sin NDCs: pedido del usuario para poder comparar de un vistazo la venta bruta (sin descontar NDC) contra la neta. Se agrega una SEGUNDA tarjeta "Venta activa" en la fila superior de KPIs, inmediatamente después de la ya existente, mostrando totalVta (la venta sin Tránsito, ANTES de sumarle ndcAdjVenta — ambas variables ya existían en render(), no se agregó ningún cálculo nuevo) con el subtítulo "todas las empresas · sin Tránsito · sin NDCs" (misma redacción que la tarjeta original, cambiando "con NDCs" por "sin NDCs"). El grid de KPIs pasa de 6 a 7 tarjetas: se actualiza grid-template-columns de ".kpis" en desktop de "1.3fr 1fr 1fr 1fr 1fr 1fr" a "1.3fr 1.3fr 1fr 1fr 1fr 1fr 1fr" (la segunda columna también ancha, porque esta tarjeta nueva muestra el mismo tipo de importe grande con fmtFull). Los breakpoints responsive (tablet/mobile) no se tocaron porque ya usaban "repeat(N,1fr)" genérico, se acomodan solos al séptimo elemento. El grid separado de las tarjetas de NDC (#kpisNdc) tiene su propio grid-template-columns inline y no se vio afectado. Sin cambios de cálculo en ningún otro KPI, gráfico, gauge o tabla — pura adición de una tarjeta de lectura usando una variable que ya se calculaba. Pedido 19/08/2026. -->
+<!-- - breve descripcion de lo hecho: se agregó una segunda tarjeta "Venta activa" (ahora son 7 KPIs en la fila superior) que muestra la venta sin descontar las Notas de Crédito/Débito, para poder comparar de un vistazo el bruto contra el neto que ya se mostraba antes. -->
+<!-- 107 - Dashboard ventas REM 2026 - grilla KPIs 7 tarjetas bien distribuidas y alineadas: el usuario reportó que, tras agregar la 7ma tarjeta en el archivo 106, el aspecto de la fila de KPIs quedó mal: texto cortado y tarjetas mal distribuidas/alineadas. Causa raíz encontrada en el CSS (sin poder confirmarla con captura de pantalla, no se pudo renderizar el archivo en un navegador real en esta sesión — se armó un harness con Puppeteer pero no hubo salida de red para descargar el binario de Chrome; el diagnóstico se hizo 100% por lectura de CSS): (1) ".kpis" tenía columnas fijas "1.3fr 1.3fr 1fr 1fr 1fr 1fr 1fr" — al pasar de 6 a 7 columnas, cada columna "1fr" quedó ~27% más angosta que antes (de 1/6.3 a 1/8.6 del ancho disponible), sin ningún piso mínimo de ancho. (2) El tamaño de fuente de los importes grandes (".kpi .k-val.full", usado por las 2 tarjetas de Venta Activa) estaba definido con "clamp(16px,2.0vw,28px)" — el "vw" depende del ancho total de la VENTANA, no del ancho de la tarjeta/columna; con 7 columnas angostas en una ventana ancha, el texto seguía queriendo renderizarse a 28px (por el vw) pero ya no entraba en la tarjeta más angosta, y como ".kpi" tiene "overflow:hidden", el sobrante se recortaba visualmente — esto explica el "texto cortado". (3) ".kpi .k-lbl" (el título de cada tarjeta) no tenía una altura mínima reservada: tarjetas con título corto ("Margen bruto") y tarjetas con título largo que puede ocupar 2 líneas ("Objetivo mensual · Ago") arrancaban el valor grande en alturas distintas, rompiendo la alineación vertical entre tarjetas. Cambios: ".kpis" pasa a "grid-template-columns:repeat(auto-fit,minmax(175px,1fr))" (todas las tarjetas con el mismo ancho mínimo garantizado de 175px, y el espacio sobrante se reparte por igual entre todas — si algún día la ventana es demasiado angosta para las 7 en una fila, en vez de aplastarlas pasan solas a una segunda fila, prolijamente, sin tocar los breakpoints de mobile que ya usaban "repeat(N,1fr)" uniforme y siguen igual). ".kpi" pasa a "display:flex;flex-direction:column" (sin cambiar el orden visual, solo prepara el contenedor para alinear mejor su contenido). ".kpi .k-lbl" suma "min-height:2.1em" (reserva siempre el mismo alto para el título, tenga 1 o 2 líneas, así el valor grande arranca a la misma altura en todas las tarjetas de la fila). ".kpi .k-val.full" baja su tope de "28px" a "clamp(15px,1.6vw,20px)" (ya no depende tanto del ancho de ventana, y el tope queda pensado para entrar cómodo en una tarjeta de ~175-220px de ancho con los importes completos más largos que se ven hoy, ej. "$1.671.115.710"), y ".kpi .k-val" (el resto de los KPIs: %, conteos) baja de "33px" a "30px" de tope por el mismo motivo de margen de seguridad. Ambos suman "word-break:break-word" como respaldo por si algún importe puntual fuera más largo de lo esperado (en vez de desbordar o recortarse, corta de línea prolijamente). Sin cambios de ningún cálculo — 100% ajustes de CSS. ACLARACIÓN IMPORTANTE: no se pudo verificar visualmente el resultado final en un navegador real en esta sesión por la falta de salida de red para el binario de Chrome; el ajuste está fundamentado en la lectura del CSS y en aritmética de ancho de caracteres, pero conviene que el usuario confirme con una captura si quedó exactamente como se busca, para un eventual ajuste fino adicional. Pedido 19/08/2026. -->
+<!-- - breve descripcion de lo hecho: se corrigió el aspecto visual de la fila de 7 tarjetas de KPI (texto de los importes grandes que se cortaba, columnas mal distribuidas y contenido desalineado verticalmente entre tarjetas) ajustando el grid a un ancho mínimo garantizado por tarjeta, reservando la misma altura de título en todas, y bajando el tamaño de fuente de los números grandes para que entren cómodos en el nuevo ancho de columna; no se pudo tomar una captura de pantalla propia para confirmarlo, así que conviene revisarlo y avisar si hace falta un ajuste fino. -->
+<!-- 108 - Dashboard ventas REM 2026 - tarjetas KPI clickeables con listado de clientes: pedido del usuario para poder ver, al hacer clic, qué clientes componen 4 de las tarjetas de KPI superiores: "Venta activa · con NDCs", "Venta activa · sin NDCs", "Clientes únicos" y "Clientes nuevos". Decisiones confirmadas con el usuario (multiple choice, 19/08/2026): (1) el importe listado en "Clientes únicos"/"Clientes nuevos" sale de la venta de remitos SIN NDC (misma base que ya usa el conteo de esas 2 tarjetas hoy), no del neto con NDC descontado; (2) una sola tarjeta desplegada a la vez, mismo patrón que ya usan "Notas de Crédito/Débito" y "Pedidos pendientes" (variable nueva kpiActiveCard, mismo mecanismo de togglear con clic en la misma tarjeta para cerrar). Implementación: las 4 tarjetas suman la clase "pend-clickable" y un atributo data-card ('ventaNdc'|'ventaSinNdc'|'cliUnicos'|'cliNuevos'); después de fijar el innerHTML de #kpis en render(), se resuelven los onclick de esas 4 tarjetas (mismo patrón que #kpisNdc/#pendientesKpis) y se llama a la función nueva renderKpiDetalle(), que escribe en un contenedor nuevo #kpiDetalleWrap (agregado en el HTML justo debajo de #kpis, envuelto en su propio ".card" porque a diferencia de NDC/Pendientes, la fila de KPIs superiores no vive dentro de un card contenedor). La función nueva computeKpiClientList(kind) arma la lista base agregando "rows()" (ya filtra mes/empresa/grupo/rubro, igual que el resto del dashboard) por cliente (mismo agrupador "d.c" que ya usa la tabla "Top clientes" existente, pero sin el tope de 12 filas), filtrando primero por el mismo ACTIVOS de 3 estados sin Tránsito (igual que "Venta activa"). Para 'ventaNdc' se le suma a cada cliente el neto de sus propias notas (NDC_DETAIL.ncr+.ndb, filtradas por mes/empresa con el mismo criterio que ndcNetForMonth, incluida la regla de seguridad que anula el ajuste si hay un rubro filtrado, porque la solapa de NDC no tiene columna RUBRO). Para 'cliNuevos' se reutiliza el mismo criterio que ya usa la tarjeta (REMS_RAW, cliente activo en el mes filtrado sin historial en meses anteriores), pero comparando por nombre de cliente ya limpiado (se agrega sc2(), una copia liviana de la función sc() que ya existía adentro de processRawRows, para poder usarla acá afuera sin duplicar esa función completa). La lista siempre se muestra ordenada de mayor a menor importe. Se deja documentado que, para "Clientes únicos"/"Clientes nuevos", el listado usa rows() (que sí respeta rubFilter/empGrupoFilter), mientras que el CONTEO que muestra la tarjeta viene de REMS_RAW (que hoy no filtra por rubFilter ni empGrupoFilter) — es una inconsistencia preexistente del cálculo original de esa tarjeta, no introducida por este cambio, y no se tocó porque no fue parte de lo pedido; puede hacer que la cantidad de filas del listado no coincida exactamente con el número grande de la tarjeta si hay un rubro o grupo de empresa filtrado. Verificado con un harness aislado en Node (extrayendo sc2/computeKpiClientList/rows tal cual del archivo) contra datos de muestra: excluye correctamente un cliente en estado Transito, aplica bien el ajuste de NDC por cliente (crédito resta, débito suma), y "Clientes nuevos" filtra correctamente al cliente sin historial en el mes anterior. Sin cambios en ningún cálculo de las tarjetas existentes ni de otras secciones. Pedido 19/08/2026. -->
+<!-- - breve descripcion de lo hecho: ahora se puede hacer clic en las tarjetas "Venta activa · con NDCs", "Venta activa · sin NDCs", "Clientes únicos" y "Clientes nuevos" para desplegar, debajo de la fila de KPIs, un listado de cliente + importe ordenado de mayor a menor; clic de nuevo en la misma tarjeta lo cierra, y solo puede haber una desplegada a la vez. -->
 
+<!-- 109 - Dashboard ventas REM 2026 - Clientes unicos y nuevos por nombre sin duplicar por codigo: el usuario reportó (25/08/2026) que la tarjeta "Clientes únicos" mostraba 160 pero el listado desplegable (archivo 108) solo traía 98 filas, y "Clientes nuevos" mostraba 21 contra 10 en el listado, con la advertencia explícita de que esto le hacía desconfiar del reporte. Diagnóstico realizado ANTES de tocar código (pedido explícito del usuario, "SIN HACER NADA AUN"): conectándome al tablero en vivo (ncialone-data.github.io/ventaremitos) vía Claude en Chrome e inspeccionando REMS_RAW/DATA reales de Ago-2026 con JavaScript en la consola de la página, se confirmó que la tarjeta contaba clientes por el string RAW de la columna CLIENTE (código+nombre tal cual viene del Google Sheet), mientras que el listado nuevo del archivo 108 agrupaba por nombre limpio (sin el código numérico, vía sc2()) — la misma lógica que ya usa la tabla "Top clientes" existente. Se identificaron 10 clientes reales con múltiples códigos en el ERP (probablemente sucursales/puntos de entrega con cuenta propia): CENTRAL DE RESTAURANTES S.R.L. (30 códigos), CENTRAPAL SOCIEDAD DE RESPONSABILIDAD LIMITADA (17), SOUTH MANAGEMENT REGION NORTE SOCIEDAD ANONIMA (8), HUINCAS SA (4), SANDYPACK S.R.L. (3), y PAPELERA DEL MAR SRL / DARTPAC SA / CENTER PACK SRL / MFK / MARTINEZ ROMINA ALEJANDRA (2 cada uno) — esto explicaba exactamente la diferencia de 62 clientes (160→98) y, en "Clientes nuevos", 11 de los 21 códigos "nuevos" del mes correspondían en realidad a clientes que ya compraban antes bajo otro código (no eran clientes nuevos genuinos). El usuario eligió explícitamente la opción de unificar el criterio hacia el nombre limpio (la alternativa ofrecida era mantener el conteo por código y hacer que el listado coincidiera con eso). Cambio implementado: en render(), las variables "clientes" y "clientesNuevos" (que antes recalculaban su propia lógica sobre REMS_RAW con el string RAW) ahora se calculan llamando directamente a "computeKpiClientList('cliUnicos').length" y "computeKpiClientList('cliNuevos').length" — la MISMA función que ya arma el listado desplegable (sin duplicar lógica), garantizando que la tarjeta y el listado sean SIEMPRE exactamente el mismo número, por construcción, en vez de depender de que dos cálculos separados coincidan. Como efecto secundario esperado y correcto: esto también resuelve la inconsistencia preexistente documentada en el archivo 108 (el conteo de la tarjeta no respetaba empGrupoFilter/rubFilter mientras el listado sí) — ahora ambos respetan los mismos filtros, porque comparten la misma función. Sin cambios en ninguna otra tarjeta, gráfico, gauge o tabla. Verificación: se conectó nuevamente al tablero en vivo con los datos reales de Ago-2026 (misma sesión de Chrome) y se simuló la lógica nueva contra REMS_RAW/DATA reales, confirmando que "Clientes únicos" pasa de 160 a 98 y "Clientes nuevos" de 21 a 10, coincidiendo exacto con el listado en ambos casos, y que los 10 nombres resultantes son idénticos a los que el usuario había reportado manualmente. También se verificó la sintaxis completa del archivo con Node. Pedido 25/08/2026. -->
+<!-- - breve descripcion de lo hecho: "Clientes únicos" y "Clientes nuevos" ahora cuentan por nombre de cliente limpio (sin el código del ERP adelante), igual que el listado que se despliega al hacer clic en esas tarjetas — antes contaban por código+nombre, lo que duplicaba clientes reales que tienen más de un código cargado (ej. sucursales), y por eso el número de la tarjeta no coincidía con la cantidad de filas del listado. Los números bajan de 160→98 (Clientes únicos) y de 21→10 (Clientes nuevos) en Ago-2026, y ahora tarjeta y listado siempre van a coincidir. -->
 
 
 

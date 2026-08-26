@@ -384,9 +384,12 @@ svg{display:block;width:100%;overflow:visible}
 </div>
 
 <div class="card" style="margin-bottom:14px">
-  <div class="c-head">
+  <div class="c-head" id="estadoDiarioHead" style="cursor:pointer;user-select:none">
     <span class="c-title">Estado de remito</span>
-    <span class="c-note" id="estadoNote"></span>
+    <span style="display:flex;align-items:center;gap:12px">
+      <span class="c-note" id="estadoNote"></span>
+      <span id="estadoDiarioChevron" style="font-size:11px;color:var(--mut2);white-space:nowrap">▸ Detalle diario</span>
+    </span>
   </div>
   <div class="tipos" id="estados"></div>
   <div id="estadoDiarioWrap" style="margin-top:16px"></div>
@@ -623,6 +626,11 @@ const EJEC_ROWS=[];  // filas activas para seguimiento comerciales: {mes,rawcli,
 // Ingresada fundidas) | 'RE' (Reparto).
 const ESTREM_ROWS=[];
 let estDiaActiva=null; // {grupo,dayKey} del día actualmente desplegado en "Estado de remito" (uno solo a la vez)
+// Plegado/desplegado de las 3 tablas diarias de "Estado de remito" (pedido 27/08/2026) — sólo
+// afecta a #estadoDiarioWrap; los chips resumen (#estados) quedan siempre visibles, sin importar
+// este estado. Arranca PLEGADO (confirmado con el usuario por multiple choice) para no ocupar
+// espacio de entrada; clic en el título/encabezado de la sección lo despliega.
+let estadoDiarioCollapsed=true;
 const NDC_MES_AGG={};  // { mes: { emp: {ncrTotal,ncrCount,ndbTotal,ndbCount} } } — ver processNdcRows()
 const NDC_DETAIL={ncr:[],ndb:[]};  // detalle por nota individual (deduplicada) para las tablas desplegables
 let ndcActiveCard=null;   // 'ncr' | 'ndb' | null — tarjeta de NDC con el detalle desplegado
@@ -1024,17 +1032,62 @@ function computeEstadoDiario(){
 function renderEstadoDiario(){
   const wrap=document.getElementById('estadoDiarioWrap');
   if(!wrap)return;
+  // Plegado/desplegado (pedido 27/08/2026): sólo afecta a este wrap, no a los chips de arriba
+  // (#estados). Se re-aplica en cada llamada a renderEstadoDiario() (incluidas las que corren por
+  // un cambio de filtro) para que el estado colapsado/expandido sobreviva a un re-render — si no,
+  // wrap.innerHTML se reemplazaría pero wrap.style.display podría perderse según el navegador.
+  const headEl=document.getElementById('estadoDiarioHead');
+  const chevronEl=document.getElementById('estadoDiarioChevron');
+  const applyCollapseUI=()=>{
+    wrap.style.display=estadoDiarioCollapsed?'none':'';
+    if(chevronEl)chevronEl.textContent=(estadoDiarioCollapsed?'▸':'▾')+' Detalle diario';
+  };
+  if(headEl){
+    headEl.onclick=()=>{
+      estadoDiarioCollapsed=!estadoDiarioCollapsed;
+      applyCollapseUI();
+    };
+  }
+  applyCollapseUI();
   const grupos=computeEstadoDiario();
   if(!grupos){ wrap.innerHTML=''; return; }
   const GRUPOS_ORDEN=['LUSTRAMAX','VYMAT','CIA. DE HIGIENE'];
   const periodoTxt=(mesFilter?MLBL[mesFilter]:'año completo')+' · fijo por empresa (LST+LST2 / VMT+VMT2 / CDH) · sin Tránsito ni Anuladas';
   const nf=n=>Math.round(n).toLocaleString('es-AR');
   const fechaLbl=(mes,day)=>{const[y,mo]=mes.split('-');return `${String(day).padStart(2,'0')}/${mo}/${y}`;};
+  // Diferencial de color por grupo de columnas (pedido 27/08/2026, con captura de referencia):
+  // caja con borde+fondo tenue alrededor de FIRMADO/INGRESADO, REPARTO y TOTAL, desde el
+  // encabezado hasta la fila "Total general" — para poder distinguir las 3 secciones de un
+  // vistazo. Se reutilizan los mismos colores que ya usa el resto del tablero para cada estado
+  // (ESTADO_COL['Firmada']/['Reparto']); para TOTAL se usa un celeste dedicado (#60a5fa) en vez
+  // de var(--acc), porque var(--acc) es el MISMO verde lima que ESTADO_COL['Firmada'] en modo
+  // oscuro y hubiera quedado idéntico al color de FIRMADO/INGRESADO (se pierde la distinción).
+  const FI_C=ESTADO_COL['Firmada'], RE_C=ESTADO_COL['Reparto'], TOT_C='#60a5fa';
+  const bx=(color,e={})=>{
+    let s='';
+    if(e.top)s+=`border-top:1.5px solid ${color};`;
+    if(e.bottom)s+=`border-bottom:1.5px solid ${color};`;
+    if(e.left)s+=`border-left:1.5px solid ${color};`;
+    if(e.right)s+=`border-right:1.5px solid ${color};`;
+    if(e.rtl)s+=`border-top-left-radius:6px;`;
+    if(e.rtr)s+=`border-top-right-radius:6px;`;
+    if(e.rbl)s+=`border-bottom-left-radius:6px;`;
+    if(e.rbr)s+=`border-bottom-right-radius:6px;`;
+    return s;
+  };
+  const grpHeaderTh=(label,color)=>`<th colspan="4" style="padding:4px 6px;text-align:center;font-size:10px;font-weight:700;color:${color};background:${color}1a;${bx(color,{top:true,left:true,right:true,rtl:true,rtr:true})}">${label}</th>`;
+  const subTh=(label,color,edge)=>`<th style="padding:4px 6px;text-align:right;font-size:9.5px;font-weight:600;color:var(--mut2);${bx(color,edge||{})}">${label}</th>`;
+  // Título de empresa (LUSTRAMAX/VYMAT/CIA. DE HIGIENE) más grande y con más protagonismo (pedido
+  // 27/08/2026: "quedan como perdidos entre la cantidad de información de las tablas, los colores
+  // y demás") — pasa de 12px gris muted a 15.5px, mismo tipo de letra que los títulos de sección
+  // (Bricolage Grotesque) en color de texto principal, con una barra de color a la izquierda a
+  // modo de acento visual, en vez de un simple label chico en mayúsculas grises.
+  const grpTitleHtml=grupo=>`<div style="font-family:'Bricolage Grotesque',sans-serif;font-size:15.5px;font-weight:800;letter-spacing:-.01em;color:var(--tx);margin-bottom:10px;padding:2px 0 2px 12px;border-left:4px solid var(--acc)">${grupo}</div>`;
   const bloques=GRUPOS_ORDEN.map(grupo=>{
     const dias=grupos[grupo]?Object.values(grupos[grupo]).sort((a,b)=>a.mes===b.mes?a.day-b.day:a.mes.localeCompare(b.mes)):[];
     if(!dias.length){
       return `<div style="margin-bottom:14px">
-        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mut2);margin-bottom:6px">${grupo}</div>
+        ${grpTitleHtml(grupo)}
         <div style="padding:8px 4px;font-size:12px;color:var(--mut)">Sin remitos en este período.</div>
       </div>`;
     }
@@ -1048,42 +1101,45 @@ function renderEstadoDiario(){
       tot.FI.comp+=fCnt;tot.FI.prod+=fProd;tot.FI.cant+=fCant;tot.FI.vta+=fVta;
       tot.RE.comp+=rCnt;tot.RE.prod+=rProd;tot.RE.cant+=rCant;tot.RE.vta+=rVta;
       tot.T.comp+=tCnt;tot.T.prod+=tProd;tot.T.cant+=tCant;tot.T.vta+=tVta;
-      const td=(v,color)=>`<td style="padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;${color?`color:${color}`:''}">${v}</td>`;
+      const td=(v,color,box)=>`<td style="padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;${color?`color:${color};`:''}${box||''}">${v}</td>`;
       return `<tr data-grupo="${grupo}" data-daykey="${dayKey}" style="cursor:pointer;border-bottom:1px solid var(--line);border-left:3px solid ${on?'var(--acc)':'transparent'};${on?'background:rgba(96,165,250,.10)':''}">
         <td style="padding:5px 8px;font-size:11px;white-space:nowrap">${fechaLbl(d.mes,d.day)}</td>
-        ${td(fCnt)}${td(fProd)}${td(nf(fCant))}${td(fmtFull(fVta))}
-        ${td(rCnt)}${td(rProd)}${td(nf(rCant))}${td(fmtFull(rVta))}
-        ${td(tCnt)}${td(tProd)}${td(nf(tCant),'var(--acc)')}${td(fmtFull(tVta),'var(--acc)')}
+        ${td(fCnt,null,bx(FI_C,{left:true}))}${td(fProd)}${td(nf(fCant))}${td(fmtFull(fVta),null,bx(FI_C,{right:true}))}
+        ${td(rCnt,null,bx(RE_C,{left:true}))}${td(rProd)}${td(nf(rCant))}${td(fmtFull(rVta),null,bx(RE_C,{right:true}))}
+        ${td(tCnt,null,bx(TOT_C,{left:true}))}${td(tProd)}${td(nf(tCant),TOT_C)}${td(fmtFull(tVta),TOT_C,bx(TOT_C,{right:true}))}
       </tr>${on?renderEstDiaDetalle(grupo,d):''}`;
     }).join('');
+    const totTd=(v,color,box)=>`<td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;${color?`color:${color};`:''}${box||''}">${v}</td>`;
     const totRow=`<tr style="border-top:2px solid var(--line2);font-weight:700">
       <td style="padding:6px 8px;font-size:11px">Total general</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${tot.FI.comp}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${tot.FI.prod}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${nf(tot.FI.cant)}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${fmtFull(tot.FI.vta)}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${tot.RE.comp}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${tot.RE.prod}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${nf(tot.RE.cant)}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${fmtFull(tot.RE.vta)}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--acc)">${tot.T.comp}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--acc)">${tot.T.prod}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--acc)">${nf(tot.T.cant)}</td>
-      <td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--acc)">${fmtFull(tot.T.vta)}</td>
+      ${totTd(tot.FI.comp,null,bx(FI_C,{bottom:true,left:true,rbl:true}))}
+      ${totTd(tot.FI.prod,null,bx(FI_C,{bottom:true}))}
+      ${totTd(nf(tot.FI.cant),null,bx(FI_C,{bottom:true}))}
+      ${totTd(fmtFull(tot.FI.vta),null,bx(FI_C,{bottom:true,right:true,rbr:true}))}
+      ${totTd(tot.RE.comp,null,bx(RE_C,{bottom:true,left:true,rbl:true}))}
+      ${totTd(tot.RE.prod,null,bx(RE_C,{bottom:true}))}
+      ${totTd(nf(tot.RE.cant),null,bx(RE_C,{bottom:true}))}
+      ${totTd(fmtFull(tot.RE.vta),null,bx(RE_C,{bottom:true,right:true,rbr:true}))}
+      ${totTd(tot.T.comp,null,bx(TOT_C,{bottom:true,left:true,rbl:true}))}
+      ${totTd(tot.T.prod,null,bx(TOT_C,{bottom:true}))}
+      ${totTd(nf(tot.T.cant),TOT_C,bx(TOT_C,{bottom:true}))}
+      ${totTd(fmtFull(tot.T.vta),TOT_C,bx(TOT_C,{bottom:true,right:true,rbr:true}))}
     </tr>`;
     return `<div style="margin-bottom:18px">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mut2);margin-bottom:6px">${grupo}</div>
+      ${grpTitleHtml(grupo)}
       <div style="overflow-x:auto">
       <table class="tbl" style="width:100%;border-collapse:collapse;font-size:11px;min-width:820px">
         <thead>
-          <tr style="border-bottom:1px solid var(--line2)">
+          <tr>
             <th rowspan="2" style="padding:5px 8px;text-align:left;font-size:10.5px;vertical-align:bottom">FECHA</th>
-            <th colspan="4" style="padding:4px 6px;text-align:center;font-size:10px;color:${ESTADO_COL['Firmada']};border-bottom:1px solid var(--line)">FIRMADO / INGRESADO</th>
-            <th colspan="4" style="padding:4px 6px;text-align:center;font-size:10px;color:${ESTADO_COL['Reparto']};border-bottom:1px solid var(--line)">REPARTO</th>
-            <th colspan="4" style="padding:4px 6px;text-align:center;font-size:10px;color:var(--acc);border-bottom:1px solid var(--line)">TOTAL</th>
+            ${grpHeaderTh('FIRMADO / INGRESADO',FI_C)}
+            ${grpHeaderTh('REPARTO',RE_C)}
+            ${grpHeaderTh('TOTAL',TOT_C)}
           </tr>
-          <tr style="border-bottom:1px solid var(--line2)">
-            ${['COMPROBANTES','PROD','CANT','IMPORTE','COMPROBANTES','PROD','CANT','IMPORTE','COMPROBANTES','PROD','CANT','IMPORTE'].map(l=>`<th style="padding:4px 6px;text-align:right;font-size:9.5px;font-weight:600;color:var(--mut2)">${l}</th>`).join('')}
+          <tr>
+            ${subTh('COMPROBANTES',FI_C,{left:true})}${subTh('PROD',FI_C)}${subTh('CANT',FI_C)}${subTh('IMPORTE',FI_C,{right:true})}
+            ${subTh('COMPROBANTES',RE_C,{left:true})}${subTh('PROD',RE_C)}${subTh('CANT',RE_C)}${subTh('IMPORTE',RE_C,{right:true})}
+            ${subTh('COMPROBANTES',TOT_C,{left:true})}${subTh('PROD',TOT_C)}${subTh('CANT',TOT_C)}${subTh('IMPORTE',TOT_C,{right:true})}
           </tr>
         </thead>
         <tbody>${filas}${totRow}</tbody>
@@ -3326,3 +3382,9 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 120 - Dashboard ventas REM 2026 - familia RESIMAX en utilidad negativa: el usuario pidió (27/08/2026) agregar la familia RESIMAX a "Utilidad negativa de clientes por familias de productos". Antes de tocar código se verificó EN VIVO contra la columna FAMILIA (columna Q) de la solapa LISTADO PRODUCTOS del Google Sheets publicado (conectándose con Claude en Chrome al tablero en vivo y haciendo un fetch() directo del CSV publicado, parseándolo respetando comillas/comas — el intento inicial con la herramienta de fetch del entorno se truncaba a ~300 filas de las 9613 reales, así que se hizo desde la consola del navegador para traer el archivo completo) que RESIMAX SÍ es un valor real y distinto de FILM en esa columna (12 productos, ej. "PAPEL FILM RESIMAX 30 X 1000 MTS s/ cortante", códigos PF00xx) — no es un error de tipeo ni la misma familia que otros productos de FILM que sólo mencionan "resimax" como proveedor de materia prima en su descripción (esos SÍ están correctamente tipificados como FILM). Se confirmó también, por multiple choice, que el usuario quiere RESIMAX SÓLO en "Utilidad negativa de clientes por familias de productos", NO en "Utilidad anual por familias de productos" (que debe seguir mostrando únicamente las 11 familias originales) — aclarando que ambas tablas comparten hoy la misma fuente de datos (FAM_ROWS/FAM_ALLOWLIST), así que agregar RESIMAX directamente a FAM_ALLOWLIST la hubiera hecho aparecer en las 2 secciones por igual. Implementación: (1) FAM_ALLOWLIST (las 11 familias originales) queda SIN CAMBIOS. (2) Se agregó FAM_ALLOWLIST_NEG, un superset (las 11 de FAM_ALLOWLIST + RESIMAX), usado ÚNICAMENTE para decidir qué filas entran a FAM_ROWS en processRawRows() — se reemplazó la condición `FAM_ALLOWLIST.has(_fam)` por `FAM_ALLOWLIST_NEG.has(_fam)`, así que FAM_ROWS ahora sí trae también las filas de RESIMAX (antes quedaban completamente afuera, ni siquiera se acumulaban). (3) Para que "Utilidad anual por familias de productos" NO se vea afectada por este cambio (ya que ahora FAM_ROWS trae una familia de más), renderUtilidadAnualFamilias() pasa a filtrar explícitamente su "rowsFirm" agregando `&&FAM_ALLOWLIST.has(d.familia)` (antes confiaba en que FAM_ROWS ya venía acotado a esas 11 familias) — sigue mostrando exactamente las mismas 11 familias que antes, sin RESIMAX. (4) renderUtilidadNegativaFamilias() NO se modificó (no tenía ningún filtro de familia propio, sólo estado==='Firmada' y Empresa/Rubro) — al recibir FAM_ROWS ya ampliado con RESIMAX, la nueva familia entra automáticamente al mismo criterio que las demás (agrupa por cliente y mes, calcula % de utilidad anual, y aparece en la tabla resumen sólo si tiene al menos 1 cliente con menos de 60% de utilidad — mismo umbral y orden que ya tenían las otras 11 familias, sin tratamiento especial). Verificación: se corrió un test aislado en Node reproduciendo EXACTAMENTE la lógica de población de FAM_ROWS (contra FAM_ALLOWLIST_NEG) y los 2 filtros de consumo (FAM_ALLOWLIST para "anual", sin filtro extra para "negativa") contra datos de muestra con 4 familias (FILM, RESIMAX, una familia real pero no pedida — "SERVILLETAS 33", para confirmar que sigue quedando afuera de TODO — y ALUMINIO): se confirmó que FAM_ROWS trae FILM+RESIMAX+ALUMINIO (3 de 4, "SERVILLETAS 33" excluida), que "Utilidad anual por familias" ve sólo FILM+ALUMINIO (RESIMAX excluida ahí), que "Utilidad negativa" ve las 3 (RESIMAX incluida), y que un cliente de muestra de RESIMAX con 5% de utilidad efectivamente calificaría para el listado <60%. También se corrió el chequeo de sintaxis completo del archivo con Node. Sin cambios en ninguna otra sección del tablero (incluida "Estado de remito" del archivo 119, que sigue igual). Pedido 27/08/2026. -->
 <!-- - breve descripcion de lo hecho: se agregó la familia RESIMAX (confirmada como valor real de la columna FAMILIA del Google Sheets, distinta de FILM) a "Utilidad negativa de clientes por familias de productos" — va a aparecer en esa tabla si tiene algún cliente con menos de 60% de utilidad, igual que las otras 11 familias. A pedido tuyo, RESIMAX NO aparece en "Utilidad anual por familias de productos", que sigue mostrando únicamente las 11 familias de siempre. -->
+
+<!-- 121 - Dashboard ventas REM 2026 - cajas de color en Estado de remito diario: el usuario pidió (27/08/2026, con una captura de referencia con recuadros rojo/verde/azul dibujados a mano sobre las tablas del archivo 119/120) agregar un diferencial de color a las tablas diarias de "Estado de remito" (LUSTRAMAX/VYMAT/CIA. DE HIGIENE), para poder identificar de un vistazo las columnas de FIRMADO/INGRESADO, las de REPARTO y las de TOTAL. No fue necesario preguntar nada antes de programar: la captura mostraba el CONCEPTO pedido (3 cajas de color separando los 3 grupos de columnas, desde el encabezado hasta la fila "Total general"), pero no exigía colores literales rojo/verde/azul — se optó por reusar los colores que el propio tablero ya usa para cada estado en otras partes (ESTADO_COL['Firmada']=verde lima #b8ff36 y ESTADO_COL['Reparto']=naranja #f59e0b, ya usados desde el archivo 119 en el texto de los encabezados de estas mismas tablas) en vez de inventar colores nuevos, para mantener consistencia visual con el resto del tablero. Para la columna TOTAL se necesitaba un 3er color distinto: no se usó var(--acc) (que es el que ya coloreaba CANT/IMPORTE de esa columna) porque var(--acc) es EXACTAMENTE el mismo verde lima que ESTADO_COL['Firmada'] en modo oscuro (#b8ff36) — usarlo para la caja de TOTAL la hubiera dejado del mismo color que FIRMADO/INGRESADO, perdiendo la distinción que pedía el usuario — así que se introdujo un celeste dedicado (#60a5fa, ya usado en el archivo 119 para el resaltado de fila activa) reemplazando a var(--acc) tanto en el color de texto de CANT/IMPORTE de TOTAL como en la nueva caja. Implementación: se agregó una función helper bx(color,{top,bottom,left,right,rtl,rtr,rbl,rbr}) que arma el fragmento de estilo CSS de borde+radio de esquina para una celda de tabla, y se aplicó a: (1) las 3 celdas de encabezado agrupador (colspan=4) — borde superior+izquierdo+derecho con radio redondeado en las 2 esquinas superiores, más un fondo tenue del mismo color al 10% de opacidad (sufijo hex "1a"); (2) las 4 sub-columnas de encabezado (COMPROBANTES/PROD/CANT/IMPORTE) de cada grupo — sólo la primera y la última llevan borde izquierdo/derecho respectivamente, para que el lateral de la caja se vea continuo bajando desde el encabezado agrupador; (3) cada celda de cada fila de día — mismo criterio, sólo primera/última columna del grupo con borde lateral; (4) la fila "Total general" — TODAS las celdas del grupo llevan borde inferior (para cerrar la caja abajo), y la primera/última además llevan borde lateral + radio redondeado en las esquinas inferiores correspondientes. El resultado visual es una caja con esquinas redondeadas alrededor de cada uno de los 3 grupos de columnas, consistente con el concepto de la captura de referencia. No se tocó el detalle desplegable al hacer clic en un día (renderEstDiaDetalle(), paneles de Firmado/Ingresado y Reparto) — el pedido fue específicamente sobre "las tablas", entendido como las tablas resumen diarias, no sobre ese detalle. Verificación: dado que este cambio es puramente de marcado HTML/CSS (no de datos ni de lógica de negocio), se armó un test aislado con jsdom (se instaló el paquete en el sandbox) que ejecuta las funciones EXACTAS computeEstadoDiario()/renderEstadoDiario() extraídas de este archivo contra datos de muestra, inyecta el resultado en un DOM real, y verifica con 12 aserciones sobre el HTML generado: que el encabezado de cada grupo tiene el color correcto (incluyendo que TOTAL usa el celeste dedicado #60a5fa y no el verde lima de var(--acc)), que las esquinas superiores del encabezado agrupador tienen el radio redondeado, que las sub-columnas de encabezado llevan el borde lateral sólo en la primera/última, que las filas de día repiten ese mismo criterio, y que la fila "Total general" cierra la caja con borde inferior + radio redondeado en las esquinas inferiores. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación ya documentada para CSS en archivos anteriores) — el marcado y los estilos quedaron verificados estructuralmente contra el DOM real (jsdom), pero conviene que el usuario confirme que las 3 cajas se ven bien, sobre todo el contraste del fondo tenue en modo claro vs. oscuro. Sin cambios en ninguna otra sección del tablero. Pedido 27/08/2026. -->
+<!-- - breve descripcion de lo hecho: se agregó un recuadro de color alrededor de cada uno de los 3 grupos de columnas en las tablas diarias de "Estado de remito" (FIRMADO/INGRESADO en verde lima, REPARTO en naranja, TOTAL en celeste), desde el encabezado hasta la fila "Total general", para poder distinguirlos de un vistazo — mismos colores que ya usa el resto del tablero para cada estado. -->
+
+<!-- 122 - Dashboard ventas REM 2026 - detalle diario plegable y titulos de empresa mas grandes: 2 pedidos del usuario (27/08/2026). (1) "¿hay posibilidad ahora que esas tablas puedan desplegarse y replegarse cuando se haga clic en esa sección?" — sobre las 3 tablas diarias de "Estado de remito" (LUSTRAMAX/VYMAT/CIA. DE HIGIENE, agregadas en el archivo 119). Se confirmó por multiple choice (2 preguntas — el primer intento de pregunta falló por un error técnico de la herramienta y hubo que reenviarla) que: (a) sólo esas 3 tablas se pliegan, los chips resumen de arriba (#estados: Firmada/Ingresada/Reparto/etc.) quedan SIEMPRE visibles, sin importar este estado; (b) la sección arranca PLEGADA al cargar/actualizar el tablero (el usuario hace clic para desplegarla cuando la necesita). (2) "los títulos de cada una de las empresas... quedan como perdidos entre la cantidad de información de las tablas, los colores y demás" — pedido de que LUSTRAMAX/VYMAT/CIA. DE HIGIENE tomen más protagonismo visual; llegó como pedido adicional en el medio del intercambio sobre el plegado, así que se implementaron los 2 juntos en este mismo archivo. Implementación (1) plegado: se agregó el estado global estadoDiarioCollapsed (arranca en true), un id "estadoDiarioHead" al encabezado de la card (con cursor:pointer) y un span "estadoDiarioChevron" (▸/▾ + texto "Detalle diario") al lado de la nota existente #estadoNote — el clic en TODO el encabezado (título "Estado de remito" + nota + chevron) alterna estadoDiarioCollapsed y aplica wrap.style.display='none'/''; el contenido de #estadoDiarioWrap se sigue construyendo por completo en cada render() (no se salta el cálculo cuando está oculto), sólo se oculta/muestra vía CSS — así al desplegar aparece instantáneo, sin esperar a que se recalculen las 3 tablas. Se verificó explícitamente que este estado sobrevive a un re-render disparado por un cambio de filtro (Empresa/Rubro/Período): renderEstadoDiario() vuelve a aplicar wrap.style.display según estadoDiarioCollapsed en cada llamada, en vez de asumir que el valor puesto por el usuario con su último clic se mantiene solo. Los chips (#estados) no fueron tocados en absoluto — siguen renderizándose y visibles igual que siempre, sin relación con este estado. (2) títulos de empresa más grandes: el div de título de cada bloque (LUSTRAMAX/VYMAT/CIA. DE HIGIENE) pasa de 12px, gris apagado (var(--mut2)), mayúsculas con letter-spacing, a 15.5px, negro/blanco de texto principal (var(--tx)), peso 800 (antes 700), con la misma tipografía que los títulos de sección del tablero (Bricolage Grotesque, igual que ".c-title") y una barra vertical de acento a la izquierda (4px, color var(--acc)) a modo de anclaje visual — se armó una función auxiliar grpTitleHtml(grupo) reutilizada en los 2 lugares donde se imprimía ese título (el bloque con datos y el bloque "Sin remitos en este período"), para no duplicar el estilo dos veces. Verificación: se armó un test aislado con jsdom que ejecuta las funciones EXACTAS computeEstadoDiario()/renderEstadoDiario() de este archivo contra un DOM real con el HTML real de la card (incluido el header con su id nuevo y el contenido de #estados intacto), y confirma con 16 aserciones: que arranca colapsado (wrap oculto, chevron cerrado), que el contenido de las tablas se construye igual aunque esté oculto, que los chips no son tocados, que un clic en el header despliega (wrap visible, chevron abierto) y un segundo clic vuelve a plegar, que un re-render simulado por cambio de filtro respeta el estado que el usuario haya dejado (no lo resetea a colapsado), y que el título de empresa tiene la tipografía/tamaño/peso/color/barra de acento nuevos. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que el plegado se ve bien y que los títulos de empresa ahora se notan más. Sin cambios en ninguna otra sección del tablero. Pedido 27/08/2026. -->
+<!-- - breve descripcion de lo hecho: la sección "Estado de remito" ahora arranca con las 3 tablas diarias (Lustramax/Vymat/Cía. de Higiene) plegadas — los chips resumen de arriba siguen siempre visibles — y un clic en el título/encabezado de la sección las despliega o las vuelve a plegar (con una flechita ▸/▾ que indica el estado). Además, los títulos de cada empresa (LUSTRAMAX/VYMAT/CIA. DE HIGIENE) ahora son más grandes, en negrita fuerte y con una barra de color a la izquierda, para que no se pierdan entre el resto de la información. -->

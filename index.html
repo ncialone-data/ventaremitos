@@ -626,6 +626,13 @@ const EJEC_ROWS=[];  // filas activas para seguimiento comerciales: {mes,rawcli,
 // Ingresada fundidas) | 'RE' (Reparto).
 const ESTREM_ROWS=[];
 let estDiaActiva=null; // {grupo,dayKey} del día actualmente desplegado en "Estado de remito" (uno solo a la vez)
+// Clientes expandidos dentro del detalle de un día/bucket de "Estado de remito" (pedido
+// 27/08/2026: el detalle ahora agrupa por CLIENTE con su total, y sólo al hacer clic en un
+// cliente se despliega el detalle de PRODUCTO/CANT/IMPORTE de ESE cliente). Es un Set (no un solo
+// "activo"), porque acá sí tiene sentido poder tener varios clientes desplegados a la vez para
+// compararlos — a diferencia del resto del tablero, que usa "uno solo a la vez". Claves:
+// "grupo§§dayKey§§bucket§§cliente".
+const estDiaClienteExpandido=new Set();
 // Plegado/desplegado de las 3 tablas diarias de "Estado de remito" (pedido 27/08/2026) — sólo
 // afecta a #estadoDiarioWrap; los chips resumen (#estados) quedan siempre visibles, sin importar
 // este estado. Arranca PLEGADO (confirmado con el usuario por multiple choice) para no ocupar
@@ -1094,20 +1101,30 @@ function renderEstadoDiario(){
     const tot={FI:{comp:0,prod:0,cant:0,vta:0},RE:{comp:0,prod:0,cant:0,vta:0},T:{comp:0,prod:0,cant:0,vta:0}};
     const filas=dias.map(d=>{
       const dayKey=`${d.mes}|${d.day}`;
-      const on=estDiaActiva&&estDiaActiva.grupo===grupo&&estDiaActiva.dayKey===dayKey;
+      // Detalle por BUCKET (pedido 27/08/2026, con captura de referencia): antes, clic en
+      // CUALQUIER parte de la fila desplegaba los 2 paneles (Firmado/Ingresado + Reparto) uno al
+      // lado del otro, angostos, con scroll interno. Ahora sólo las celdas de FIRMADO/INGRESADO
+      // (data-bucket="FI") o de REPARTO (data-bucket="RE") son clickeables — FECHA y TOTAL no
+      // despliegan nada — y cada click despliega ÚNICAMENTE el detalle de ESE bucket, a todo el
+      // ancho de la tabla (ver renderEstDiaDetalle más abajo). onFI/onRE controlan tanto el
+      // resaltado de esa fila como qué detalle (si alguno) se imprime debajo.
+      const onFI=estDiaActiva&&estDiaActiva.grupo===grupo&&estDiaActiva.dayKey===dayKey&&estDiaActiva.bucket==='FI';
+      const onRE=estDiaActiva&&estDiaActiva.grupo===grupo&&estDiaActiva.dayKey===dayKey&&estDiaActiva.bucket==='RE';
+      const on=onFI||onRE;
+      const accentColor=onFI?FI_C:onRE?RE_C:'transparent';
       const fCnt=d.FI.comp.size,fProd=d.FI.prod.size,fCant=d.FI.cant,fVta=d.FI.vta;
       const rCnt=d.RE.comp.size,rProd=d.RE.prod.size,rCant=d.RE.cant,rVta=d.RE.vta;
       const tCnt=fCnt+rCnt,tProd=fProd+rProd,tCant=fCant+rCant,tVta=fVta+rVta;
       tot.FI.comp+=fCnt;tot.FI.prod+=fProd;tot.FI.cant+=fCant;tot.FI.vta+=fVta;
       tot.RE.comp+=rCnt;tot.RE.prod+=rProd;tot.RE.cant+=rCant;tot.RE.vta+=rVta;
       tot.T.comp+=tCnt;tot.T.prod+=tProd;tot.T.cant+=tCant;tot.T.vta+=tVta;
-      const td=(v,color,box)=>`<td style="padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;${color?`color:${color};`:''}${box||''}">${v}</td>`;
-      return `<tr data-grupo="${grupo}" data-daykey="${dayKey}" style="cursor:pointer;border-bottom:1px solid var(--line);border-left:3px solid ${on?'var(--acc)':'transparent'};${on?'background:rgba(96,165,250,.10)':''}">
+      const td=(v,color,box,bucket)=>`<td${bucket?` data-bucket="${bucket}" style="cursor:pointer;padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;${color?`color:${color};`:''}${box||''}"`:` style="padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;${color?`color:${color};`:''}${box||''}"`}>${v}</td>`;
+      return `<tr data-grupo="${grupo}" data-daykey="${dayKey}" style="border-bottom:1px solid var(--line);border-left:3px solid ${accentColor};${on?'background:rgba(96,165,250,.10)':''}">
         <td style="padding:5px 8px;font-size:11px;white-space:nowrap">${fechaLbl(d.mes,d.day)}</td>
-        ${td(fCnt,null,bx(FI_C,{left:true}))}${td(fProd)}${td(nf(fCant))}${td(fmtFull(fVta),null,bx(FI_C,{right:true}))}
-        ${td(rCnt,null,bx(RE_C,{left:true}))}${td(rProd)}${td(nf(rCant))}${td(fmtFull(rVta),null,bx(RE_C,{right:true}))}
+        ${td(fCnt,null,bx(FI_C,{left:true}),'FI')}${td(fProd,null,'','FI')}${td(nf(fCant),null,'','FI')}${td(fmtFull(fVta),null,bx(FI_C,{right:true}),'FI')}
+        ${td(rCnt,null,bx(RE_C,{left:true}),'RE')}${td(rProd,null,'','RE')}${td(nf(rCant),null,'','RE')}${td(fmtFull(rVta),null,bx(RE_C,{right:true}),'RE')}
         ${td(tCnt,null,bx(TOT_C,{left:true}))}${td(tProd)}${td(nf(tCant),TOT_C)}${td(fmtFull(tVta),TOT_C,bx(TOT_C,{right:true}))}
-      </tr>${on?renderEstDiaDetalle(grupo,d):''}`;
+      </tr>${onFI?renderEstDiaDetalle(grupo,d,'FI'):''}${onRE?renderEstDiaDetalle(grupo,d,'RE'):''}`;
     }).join('');
     const totTd=(v,color,box)=>`<td style="padding:6px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;${color?`color:${color};`:''}${box||''}">${v}</td>`;
     const totRow=`<tr style="border-top:2px solid var(--line2);font-weight:700">
@@ -1148,44 +1165,89 @@ function renderEstadoDiario(){
     </div>`;
   }).join('');
   wrap.innerHTML=`<div style="font-size:11px;color:var(--mut);margin-bottom:10px">${periodoTxt}</div>${bloques}`;
-  wrap.querySelectorAll('tr[data-grupo]').forEach(tr=>{
+  // Clic por celda (data-bucket), no por fila entera — pedido 27/08/2026: clic en las columnas de
+  // FIRMADO/INGRESADO despliega SÓLO ese detalle, clic en REPARTO despliega SÓLO el suyo; FECHA y
+  // TOTAL no tienen data-bucket, así que no hacen nada al clickearse.
+  wrap.querySelectorAll('tr[data-grupo] td[data-bucket]').forEach(td=>{
+    td.onclick=()=>{
+      const tr=td.closest('tr');
+      const grupo=tr.dataset.grupo, dayKey=tr.dataset.daykey, bucket=td.dataset.bucket;
+      const isSame=estDiaActiva&&estDiaActiva.grupo===grupo&&estDiaActiva.dayKey===dayKey&&estDiaActiva.bucket===bucket;
+      estDiaActiva=isSame?null:{grupo,dayKey,bucket};
+      renderEstadoDiario();
+    };
+  });
+  // Clic en un cliente del detalle -> despliega/repliega SÓLO el desglose de productos de ESE
+  // cliente (pedido 27/08/2026) — independiente entre clientes, se pueden tener varios abiertos.
+  wrap.querySelectorAll('tr[data-cliente-toggle]').forEach(tr=>{
     tr.onclick=()=>{
-      const grupo=tr.dataset.grupo, dayKey=tr.dataset.daykey;
-      estDiaActiva=(estDiaActiva&&estDiaActiva.grupo===grupo&&estDiaActiva.dayKey===dayKey)?null:{grupo,dayKey};
+      const key=tr.dataset.clienteToggle;
+      if(estDiaClienteExpandido.has(key))estDiaClienteExpandido.delete(key);
+      else estDiaClienteExpandido.add(key);
       renderEstadoDiario();
     };
   });
 }
-function renderEstDiaDetalle(grupo,d){
-  const panel=(bucket,label,col)=>{
-    const items=Object.values(d[bucket].det).sort((a,b)=>b.vta-a.vta);
-    if(!items.length)return '';
-    const rows=items.map(it=>`<tr style="border-bottom:1px solid var(--line)">
-      <td style="padding:4px 8px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:0">${it.cliente}</td>
-      <td style="padding:4px 8px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:0">${it.prod}</td>
-      <td style="padding:4px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${Math.round(it.cant).toLocaleString('es-AR')}</td>
-      <td style="padding:4px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${fmtFull(it.vta)}</td>
+// Detalle de UN SOLO bucket (FI o RE), a todo el ancho de la tabla — pedido 27/08/2026 (antes
+// mostraba los 2 buckets juntos, en 2 columnas angostas de min-width:280px con scroll interno,
+// difícil de leer: "hay que estar scrollando para ver el listado completo"). Ocupa el colspan
+// completo (13 columnas) de la tabla resumen. AJUSTE 27/08/2026 (mismo día, 2do pedido): (a) se
+// quitó el scroll interno (max-height/overflow-y) — la lista se ve completa siempre, sin importar
+// cuántas líneas tenga; (b) el detalle ahora agrupa por CLIENTE con su total (CANT/IMPORTE
+// sumados de todos sus productos ese día), colapsado por defecto — recién al hacer clic en un
+// cliente se despliega, debajo de esa fila, el desglose de PRODUCTO/CANT/IMPORTE de ese cliente
+// (ver estDiaClienteExpandido, un Set porque acá sí tiene sentido tener varios clientes abiertos
+// a la vez para comparar, a diferencia del resto del tablero).
+function renderEstDiaDetalle(grupo,d,bucket){
+  const dayKey=`${d.mes}|${d.day}`;
+  const col=bucket==='RE'?ESTADO_COL['Reparto']:ESTADO_COL['Firmada'];
+  const label=bucket==='RE'?'Reparto':'Firmado / Ingresado';
+  const items=Object.values(d[bucket].det);
+  if(!items.length){
+    return `<tr><td colspan="13" style="padding:10px 8px;background:rgba(255,255,255,.02)">
+      <div style="font-size:11.5px;color:var(--mut)">${label}: sin líneas.</div>
+    </td></tr>`;
+  }
+  // Agrupar por cliente: total de CANT/IMPORTE + su propio listado de productos.
+  const porCliente={};
+  items.forEach(it=>{
+    if(!porCliente[it.cliente])porCliente[it.cliente]={cliente:it.cliente,cant:0,vta:0,productos:[]};
+    porCliente[it.cliente].cant+=it.cant;
+    porCliente[it.cliente].vta+=it.vta;
+    porCliente[it.cliente].productos.push(it);
+  });
+  const clientes=Object.values(porCliente).sort((a,b)=>b.vta-a.vta);
+  clientes.forEach(c=>c.productos.sort((a,b)=>b.vta-a.vta));
+  const rows=clientes.map(c=>{
+    const key=`${grupo}§§${dayKey}§§${bucket}§§${c.cliente}`;
+    const open=estDiaClienteExpandido.has(key);
+    const prodRows=c.productos.map(p=>`<tr style="border-bottom:1px solid var(--line)">
+      <td></td>
+      <td style="padding:4px 10px;font-size:11.5px;color:var(--mut)">${p.prod}</td>
+      <td style="padding:4px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--mut)">${Math.round(p.cant).toLocaleString('es-AR')}</td>
+      <td style="padding:4px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--mut)">${fmtFull(p.vta)}</td>
     </tr>`).join('');
-    return `<div style="flex:1;min-width:280px">
-      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${col};margin-bottom:4px">${label} · ${items.length.toLocaleString('es-AR')} línea${items.length===1?'':'s'}</div>
-      <div style="max-height:260px;overflow-y:auto;border:1px solid var(--line2);border-radius:6px">
-        <table style="width:100%;border-collapse:collapse;table-layout:fixed">
-          <colgroup><col style="width:34%"><col style="width:38%"><col style="width:12%"><col style="width:16%"></colgroup>
-          <thead><tr style="position:sticky;top:0;background:var(--panel2)">
-            <th style="padding:4px 8px;text-align:left;font-size:9.5px;color:var(--mut2)">CLIENTE</th>
-            <th style="padding:4px 8px;text-align:left;font-size:9.5px;color:var(--mut2)">PRODUCTO</th>
-            <th style="padding:4px 6px;text-align:right;font-size:9.5px;color:var(--mut2)">CANT</th>
-            <th style="padding:4px 6px;text-align:right;font-size:9.5px;color:var(--mut2)">IMPORTE</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    </div>`;
-  };
-  const fiPanel=panel('FI','Firmado / Ingresado',ESTADO_COL['Firmada']);
-  const rePanel=panel('RE','Reparto',ESTADO_COL['Reparto']);
+    return `<tr data-cliente-toggle="${key}" style="cursor:pointer;border-bottom:1px solid var(--line);${open?'background:rgba(96,165,250,.08)':''}">
+      <td style="padding:6px 10px;font-size:12px;font-weight:600">${open?'▾':'▸'} ${c.cliente}</td>
+      <td style="padding:6px 10px;font-size:11px;color:var(--mut2)">${c.productos.length} producto${c.productos.length===1?'':'s'}</td>
+      <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600">${Math.round(c.cant).toLocaleString('es-AR')}</td>
+      <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600">${fmtFull(c.vta)}</td>
+    </tr>${open?prodRows:''}`;
+  }).join('');
   return `<tr><td colspan="13" style="padding:10px 8px;background:rgba(255,255,255,.02)">
-    <div style="display:flex;gap:16px;flex-wrap:wrap">${fiPanel}${rePanel}</div>
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${col};margin-bottom:6px">${label} · ${clientes.length.toLocaleString('es-AR')} cliente${clientes.length===1?'':'s'} · clic en un cliente para ver el detalle de productos</div>
+    <div style="border:1px solid var(--line2);border-radius:6px">
+      <table style="width:100%;border-collapse:collapse;table-layout:fixed">
+        <colgroup><col style="width:32%"><col style="width:40%"><col style="width:12%"><col style="width:16%"></colgroup>
+        <thead><tr style="background:var(--panel2)">
+          <th style="padding:5px 10px;text-align:left;font-size:10px;color:var(--mut2)">CLIENTE</th>
+          <th style="padding:5px 10px;text-align:left;font-size:10px;color:var(--mut2)"></th>
+          <th style="padding:5px 10px;text-align:right;font-size:10px;color:var(--mut2)">CANT</th>
+          <th style="padding:5px 10px;text-align:right;font-size:10px;color:var(--mut2)">IMPORTE</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
   </td></tr>`;
 }
 
@@ -3388,3 +3450,9 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 122 - Dashboard ventas REM 2026 - detalle diario plegable y titulos de empresa mas grandes: 2 pedidos del usuario (27/08/2026). (1) "¿hay posibilidad ahora que esas tablas puedan desplegarse y replegarse cuando se haga clic en esa sección?" — sobre las 3 tablas diarias de "Estado de remito" (LUSTRAMAX/VYMAT/CIA. DE HIGIENE, agregadas en el archivo 119). Se confirmó por multiple choice (2 preguntas — el primer intento de pregunta falló por un error técnico de la herramienta y hubo que reenviarla) que: (a) sólo esas 3 tablas se pliegan, los chips resumen de arriba (#estados: Firmada/Ingresada/Reparto/etc.) quedan SIEMPRE visibles, sin importar este estado; (b) la sección arranca PLEGADA al cargar/actualizar el tablero (el usuario hace clic para desplegarla cuando la necesita). (2) "los títulos de cada una de las empresas... quedan como perdidos entre la cantidad de información de las tablas, los colores y demás" — pedido de que LUSTRAMAX/VYMAT/CIA. DE HIGIENE tomen más protagonismo visual; llegó como pedido adicional en el medio del intercambio sobre el plegado, así que se implementaron los 2 juntos en este mismo archivo. Implementación (1) plegado: se agregó el estado global estadoDiarioCollapsed (arranca en true), un id "estadoDiarioHead" al encabezado de la card (con cursor:pointer) y un span "estadoDiarioChevron" (▸/▾ + texto "Detalle diario") al lado de la nota existente #estadoNote — el clic en TODO el encabezado (título "Estado de remito" + nota + chevron) alterna estadoDiarioCollapsed y aplica wrap.style.display='none'/''; el contenido de #estadoDiarioWrap se sigue construyendo por completo en cada render() (no se salta el cálculo cuando está oculto), sólo se oculta/muestra vía CSS — así al desplegar aparece instantáneo, sin esperar a que se recalculen las 3 tablas. Se verificó explícitamente que este estado sobrevive a un re-render disparado por un cambio de filtro (Empresa/Rubro/Período): renderEstadoDiario() vuelve a aplicar wrap.style.display según estadoDiarioCollapsed en cada llamada, en vez de asumir que el valor puesto por el usuario con su último clic se mantiene solo. Los chips (#estados) no fueron tocados en absoluto — siguen renderizándose y visibles igual que siempre, sin relación con este estado. (2) títulos de empresa más grandes: el div de título de cada bloque (LUSTRAMAX/VYMAT/CIA. DE HIGIENE) pasa de 12px, gris apagado (var(--mut2)), mayúsculas con letter-spacing, a 15.5px, negro/blanco de texto principal (var(--tx)), peso 800 (antes 700), con la misma tipografía que los títulos de sección del tablero (Bricolage Grotesque, igual que ".c-title") y una barra vertical de acento a la izquierda (4px, color var(--acc)) a modo de anclaje visual — se armó una función auxiliar grpTitleHtml(grupo) reutilizada en los 2 lugares donde se imprimía ese título (el bloque con datos y el bloque "Sin remitos en este período"), para no duplicar el estilo dos veces. Verificación: se armó un test aislado con jsdom que ejecuta las funciones EXACTAS computeEstadoDiario()/renderEstadoDiario() de este archivo contra un DOM real con el HTML real de la card (incluido el header con su id nuevo y el contenido de #estados intacto), y confirma con 16 aserciones: que arranca colapsado (wrap oculto, chevron cerrado), que el contenido de las tablas se construye igual aunque esté oculto, que los chips no son tocados, que un clic en el header despliega (wrap visible, chevron abierto) y un segundo clic vuelve a plegar, que un re-render simulado por cambio de filtro respeta el estado que el usuario haya dejado (no lo resetea a colapsado), y que el título de empresa tiene la tipografía/tamaño/peso/color/barra de acento nuevos. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que el plegado se ve bien y que los títulos de empresa ahora se notan más. Sin cambios en ninguna otra sección del tablero. Pedido 27/08/2026. -->
 <!-- - breve descripcion de lo hecho: la sección "Estado de remito" ahora arranca con las 3 tablas diarias (Lustramax/Vymat/Cía. de Higiene) plegadas — los chips resumen de arriba siguen siempre visibles — y un clic en el título/encabezado de la sección las despliega o las vuelve a plegar (con una flechita ▸/▾ que indica el estado). Además, los títulos de cada empresa (LUSTRAMAX/VYMAT/CIA. DE HIGIENE) ahora son más grandes, en negrita fuerte y con una barra de color a la izquierda, para que no se pierdan entre el resto de la información. -->
+
+<!-- 124 - Dashboard ventas REM 2026 - detalle por bucket a todo el ancho en Estado de remito: el usuario pidió (27/08/2026, retomando la línea de continuidad desde la 122, sin la 123 que quedó aparte) 2 cambios sobre el detalle que se despliega al hacer clic en una fila de día de "Estado de remito": (1) que el clic sea sensible a la COLUMNA donde se hace, no a la fila entera — clic en las columnas de FIRMADO/INGRESADO despliega ÚNICAMENTE ese detalle, clic en las columnas de REPARTO despliega ÚNICAMENTE el suyo, y un segundo clic en esa misma sección lo repliega; (2) que el detalle desplegado ocupe TODO el ancho de la tabla en vez de quedar dividido en 2 paneles angostos lado a lado con scroll interno horizontal/vertical incómodo (se adjuntó una captura mostrando el problema: "hay que estar scrollando para ver el listado completo"). Antes de tocar código no hizo falta preguntar nada — la captura de referencia (con una flecha roja marcando el clic sobre la fila del 24/08 y el recuadro del detalle desplegado) dejaba claro el comportamiento esperado. Implementación: (1) estDiaActiva pasa de {grupo,dayKey} a {grupo,dayKey,bucket} (bucket:'FI'|'RE') — ya no hay un solo "día activo" que muestre ambos buckets, sino un "bucket activo" específico. (2) las 4 celdas de cada fila que corresponden a FIRMADO/INGRESADO y las 4 que corresponden a REPARTO ahora llevan un atributo data-bucket="FI"/"RE" y cursor:pointer; las celdas de FECHA y de TOTAL NO llevan ese atributo, así que no son clickeables (a propósito — el pedido fue específicamente sobre las columnas de Firmado/Ingresado y Reparto). (3) el listener de clic pasa de estar en la fila completa (tr.onclick) a estar en cada celda con data-bucket (wrap.querySelectorAll('tr[data-grupo] td[data-bucket]')) — al hacer clic, si ya estaba activo ESE MISMO bucket de ESE MISMO día, se repliega (estDiaActiva=null); si no, pasa a ser el único activo (reemplaza cualquier otro bucket/día que estuviera abierto en cualquier tabla, mismo patrón "uno solo a la vez" que el resto del tablero). (4) la fila del día ahora resalta con el color del bucket activo en el borde izquierdo (verde lima si está abierto el de Firmado/Ingresado, naranja si es el de Reparto) en vez del celeste genérico de antes. (5) renderEstDiaDetalle(d,bucket) se reescribió por completo: antes armaba 2 paneles de ancho fijo (flex, min-width:280px cada uno, con su propia tabla angosta) y los mostraba siempre juntos; ahora recibe el bucket específico y devuelve UNA sola fila <tr><td colspan="13">, con una única tabla que ocupa el 100% del ancho disponible (columnas CLIENTE 32%/PRODUCTO 40%/CANT 12%/IMPORTE 16%, sin truncar con elipsis como antes, ya que ahora hay espacio de sobra) y altura máxima de scroll aumentada de 260px a 340px (para que quepan más líneas antes de necesitar scroll). Verificación: se corrió un test aislado con jsdom que ejecuta las funciones EXACTAS computeEstadoDiario()/renderEstDiaDetalle()/renderEstadoDiario() de este archivo contra datos de muestra (2 líneas en Firmado/Ingresado y 1 en Reparto para el mismo día), y confirma con 21 aserciones: que cada fila tiene exactamente 4 celdas data-bucket="FI" y 4 data-bucket="RE", que FECHA y TOTAL no tienen data-bucket ni onclick, que un clic en una celda FI despliega solamente 1 fila de detalle (no 2) con el contenido correcto y sin mezclar clientes de Reparto, que ya no existe el contenedor flex de 2 paneles, que un segundo clic en la misma celda repliega, que un clic en RE muestra sólo Reparto, y que un clic en FI mientras RE estaba abierto reemplaza el detalle (sigue habiendo uno solo visible, nunca 2 a la vez). También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que el detalle ahora se lee cómodo a todo el ancho y que el clic responde según la columna. Sin cambios en el plegado de la sección, los títulos de empresa ni las cajas de color de las columnas (heredados intactos del archivo 122). Pedido 27/08/2026. -->
+<!-- - breve descripcion de lo hecho: ahora el clic responde según en qué columna lo hagas — clic en las columnas de Firmado/Ingresado despliega sólo ese detalle, clic en Reparto despliega sólo el suyo (clic de nuevo en la misma sección lo repliega), y el detalle desplegado (cliente, producto, cantidad, importe) ocupa todo el ancho de la tabla en vez de quedar dividido en 2 columnas angostas con scroll incómodo. -->
+
+<!-- 125 - Dashboard ventas REM 2026 - detalle agrupado por cliente sin scroll interno: 2 pedidos del usuario (27/08/2026, mismo día que el archivo 124, con una captura mostrando el detalle de Reparto del 24/08 con 71 líneas y scroll interno) sobre el detalle que se despliega al hacer clic en las columnas de Firmado/Ingresado o Reparto de una fila de día: (1) "que se vea el listado completo. No que quede obligado a tener que scrollear" — se quitó el límite de alto (max-height:340px) y el scroll interno (overflow-y:auto) que tenía el detalle desde el archivo 124; ahora la tabla de detalle crece tanto como haga falta y se ve completa (a costa de alargar la página, que es lo que pidió el usuario). (2) "me gustaría que los clientes estén agrupados con el total, y cuando yo doy clic en el cliente, recién ahí se despliegue el listado de productos" — el detalle pasó de listar una fila por cada combinación cliente+producto (podían ser decenas de líneas, como las 71 de la captura) a listar una fila por CLIENTE con el total de CANT/IMPORTE sumado de todos sus productos ese día+bucket, colapsada por defecto; recién al hacer clic en un cliente se despliegan debajo, indentados, sus productos individuales (PRODUCTO/CANT/IMPORTE, ordenados de mayor a menor importe). A diferencia del resto del tablero (que usa "una sola cosa activa a la vez"), acá se optó por permitir varios clientes desplegados simultáneamente (estDiaClienteExpandido es un Set, no un valor único) porque tiene sentido querer comparar el detalle de 2+ clientes de la misma fecha sin perder lo que ya se abrió — el usuario no pidió explícitamente "uno solo a la vez", así que se priorizó la flexibilidad. Implementación: (1) renderEstDiaDetalle(grupo,d,bucket) (antes recibía sólo d,bucket) ahora agrupa Object.values(d[bucket].det) por it.cliente en un objeto {cliente,cant,vta,productos:[]}, suma cant/vta de todos los productos de ese cliente, ordena los clientes por vta descendente y cada lista de productos también por vta descendente. (2) cada fila de cliente lleva data-cliente-toggle="grupo§§dayKey§§bucket§§cliente" (separador "§§" en vez de "|", porque un nombre de cliente jamás lo va a tener, evitando falsos matches) y un indicador ▸/▾ antes del nombre; al hacer clic se agrega/quita esa clave del Set global y se vuelve a renderizar. (3) si el cliente está expandido, se insertan sus filas de producto justo debajo de su fila (indentadas visualmente con texto más chico y atenuado en la columna PRODUCTO), dentro de la MISMA tabla — ya no hay una tabla anidada aparte. Verificación: se corrió un test aislado con jsdom que ejecuta las funciones EXACTAS computeEstadoDiario()/renderEstDiaDetalle()/renderEstadoDiario() de este archivo contra 2 clientes de muestra (Cliente A con 2 productos por $1.000+$500=$1.500, Cliente B con 1 producto por $3.000), y confirma con 16 aserciones: que ya no hay max-height ni overflow-y en el detalle, que se muestran 2 filas de cliente ordenadas de mayor a menor importe total (B antes que A), que el total de Cliente A suma correctamente sus 2 productos, que por defecto NINGÚN producto individual es visible (colapsado), que un clic en un cliente despliega sólo sus productos sin mezclar con el otro cliente, que se pueden tener 2 clientes desplegados a la vez, y que un segundo clic repliega ese cliente puntual sin afectar al otro que sigue abierto. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que se ve bien con una fecha que tenga muchos clientes (como el 24/08, con 71 líneas repartidas en varios clientes). Sin cambios en el plegado de la sección, los títulos de empresa, las cajas de color ni el criterio de "un solo bucket activo por vez" (que sigue igual, heredado del archivo 124) — sólo cambió lo que se ve DENTRO de ese detalle. Pedido 27/08/2026. -->
+<!-- - breve descripcion de lo hecho: el detalle que se despliega al hacer clic en Firmado/Ingresado o Reparto ya no tiene scroll interno (se ve la lista completa, aunque tenga muchas líneas) y ahora agrupa por cliente con su total — recién al hacer clic en un cliente puntual se despliega el detalle de sus productos, cantidad e importe; se pueden tener varios clientes abiertos a la vez para comparar. -->

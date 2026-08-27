@@ -6,6 +6,13 @@
 <title>Tablero avance de ventas</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Outfit:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<!-- html2canvas (CDN) — pedido 27/08/2026, para los botones de captura de cada tabla de "Estado
+     de remito" (uno por empresa, en vez del botón único que capturaba las 3 juntas de la versión
+     única 123). Es la PRIMERA dependencia externa de JS de la línea de continuidad real del
+     tablero (118, 123 y 126 usaron librerías externas pero quedaron fuera de esta numeración, a
+     pedido explícito del usuario). Si no hay conexión a internet, el resto del tablero sigue
+     funcionando igual — sólo los botones de captura no. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
 :root{
   --bg:#080a0e; --bg2:#0c0f15;
@@ -1062,6 +1069,7 @@ function renderEstadoDiario(){
   const periodoTxt=(mesFilter?MLBL[mesFilter]:'año completo')+' · fijo por empresa (LST+LST2 / VMT+VMT2 / CDH) · sin Tránsito ni Anuladas';
   const nf=n=>Math.round(n).toLocaleString('es-AR');
   const fechaLbl=(mes,day)=>{const[y,mo]=mes.split('-');return `${String(day).padStart(2,'0')}/${mo}/${y}`;};
+  const slug=g=>g.replace(/[^a-zA-Z0-9]+/g,'_');
   // Diferencial de color por grupo de columnas (pedido 27/08/2026, con captura de referencia):
   // caja con borde+fondo tenue alrededor de FIRMADO/INGRESADO, REPARTO y TOTAL, desde el
   // encabezado hasta la fila "Total general" — para poder distinguir las 3 secciones de un
@@ -1142,7 +1150,16 @@ function renderEstadoDiario(){
       ${totTd(nf(tot.T.cant),TOT_C,bx(TOT_C,{bottom:true}))}
       ${totTd(fmtFull(tot.T.vta),TOT_C,bx(TOT_C,{bottom:true,right:true,rbr:true}))}
     </tr>`;
-    return `<div style="margin-bottom:18px">
+    // Botón de captura POR TABLA (pedido 27/08/2026, retomando la versión única 123 pero uno por
+    // empresa en vez de uno solo para las 3 juntas, con captura de referencia mostrando el botón
+    // arriba a la derecha de cada tabla) — el bloque entero (título + tabla) es el que se
+    // fotografía, mediante html2canvas con "ignoreElements" para excluir el propio botón (position
+    // absolute, no ocupa espacio en el flujo, así el título no tiene que dejarle hueco).
+    return `<div style="margin-bottom:18px;position:relative" id="estadoDiarioBloque_${slug(grupo)}">
+      <button type="button" data-capture-grupo="${grupo}" title="Capturar esta tabla como imagen (para pegar en WhatsApp)" style="position:absolute;top:0;right:0;z-index:1;display:flex;align-items:center;gap:6px;padding:4px 9px;font-size:10.5px;font-weight:600;color:var(--tx);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;cursor:pointer">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <span class="captureBtnLbl">Capturar</span>
+      </button>
       ${grpTitleHtml(grupo)}
       <div style="overflow-x:auto">
       <table class="tbl" style="width:100%;border-collapse:collapse;font-size:11px;min-width:820px">
@@ -1165,6 +1182,9 @@ function renderEstadoDiario(){
     </div>`;
   }).join('');
   wrap.innerHTML=`<div style="font-size:11px;color:var(--mut);margin-bottom:10px">${periodoTxt}</div>${bloques}`;
+  wrap.querySelectorAll('button[data-capture-grupo]').forEach(btn=>{
+    btn.onclick=()=>captureEstadoTablaImage(btn.dataset.captureGrupo);
+  });
   // Clic por celda (data-bucket), no por fila entera — pedido 27/08/2026: clic en las columnas de
   // FIRMADO/INGRESADO despliega SÓLO ese detalle, clic en REPARTO despliega SÓLO el suyo; FECHA y
   // TOTAL no tienen data-bucket, así que no hacen nada al clickearse.
@@ -1187,6 +1207,74 @@ function renderEstadoDiario(){
       renderEstadoDiario();
     };
   });
+}
+// Captura UNA sola tabla de "Estado de remito" (título + tabla de esa empresa, sin el botón) como
+// PNG y lo copia al portapapeles para pegar en WhatsApp — pedido 27/08/2026, retomando la versión
+// única 123 (que capturaba las 3 tablas juntas) pero un botón independiente por tabla, según la
+// captura de referencia del usuario. Misma mecánica de portapapeles/fallback de descarga que la
+// 123: si el navegador no soporta copiar imágenes, descarga el PNG en su lugar.
+async function captureEstadoTablaImage(grupo){
+  const slugFn=g=>g.replace(/[^a-zA-Z0-9]+/g,'_');
+  const bloque=document.getElementById(`estadoDiarioBloque_${slugFn(grupo)}`);
+  const btn=bloque?bloque.querySelector('button[data-capture-grupo]'):null;
+  const lbl=btn?btn.querySelector('.captureBtnLbl'):null;
+  if(typeof html2canvas==='undefined'){
+    alert('No se pudo cargar la librería para generar la imagen (html2canvas) desde internet. Revisá tu conexión e intentá de nuevo — el resto del tablero funciona igual sin esto.');
+    return;
+  }
+  if(!bloque){
+    alert('No se encontró la tabla de '+grupo+' para capturar.');
+    return;
+  }
+  if(btn)btn.disabled=true;
+  if(lbl)lbl.textContent='Generando...';
+  try{
+    const bg=getComputedStyle(document.body).getPropertyValue('--panel').trim()||'#11141c';
+    const canvas=await html2canvas(bloque,{
+      backgroundColor:bg,
+      scale:2,
+      useCORS:true,
+      width:bloque.scrollWidth,
+      height:bloque.scrollHeight,
+      windowWidth:bloque.scrollWidth,
+      windowHeight:bloque.scrollHeight,
+      ignoreElements:(el)=>el.hasAttribute&&el.hasAttribute('data-capture-grupo')
+    });
+    canvas.toBlob(async blob=>{
+      if(!blob){
+        if(lbl)lbl.textContent='Capturar';
+        if(btn)btn.disabled=false;
+        alert('No se pudo generar la imagen. Probá de nuevo.');
+        return;
+      }
+      let copiado=false;
+      try{
+        if(navigator.clipboard&&window.ClipboardItem){
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          copiado=true;
+        }
+      }catch(e){ copiado=false; }
+      if(copiado){
+        if(lbl)lbl.textContent='¡Copiado! ✓';
+      } else {
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        const hoy=new Date();
+        const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
+        a.href=url; a.download=`Estado de remito - ${grupo} - ${fechaStr}.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),3000);
+        if(lbl)lbl.textContent='Descargada ⬇';
+      }
+      if(btn)btn.disabled=false;
+      setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
+    },'image/png');
+  }catch(err){
+    console.error('captureEstadoTablaImage error',err);
+    if(lbl)lbl.textContent='Capturar';
+    if(btn)btn.disabled=false;
+    alert('No se pudo generar la imagen. Probá de nuevo.');
+  }
 }
 // Detalle de UN SOLO bucket (FI o RE), a todo el ancho de la tabla — pedido 27/08/2026 (antes
 // mostraba los 2 buckets juntos, en 2 columnas angostas de min-width:280px con scroll interno,
@@ -3456,3 +3544,6 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 125 - Dashboard ventas REM 2026 - detalle agrupado por cliente sin scroll interno: 2 pedidos del usuario (27/08/2026, mismo día que el archivo 124, con una captura mostrando el detalle de Reparto del 24/08 con 71 líneas y scroll interno) sobre el detalle que se despliega al hacer clic en las columnas de Firmado/Ingresado o Reparto de una fila de día: (1) "que se vea el listado completo. No que quede obligado a tener que scrollear" — se quitó el límite de alto (max-height:340px) y el scroll interno (overflow-y:auto) que tenía el detalle desde el archivo 124; ahora la tabla de detalle crece tanto como haga falta y se ve completa (a costa de alargar la página, que es lo que pidió el usuario). (2) "me gustaría que los clientes estén agrupados con el total, y cuando yo doy clic en el cliente, recién ahí se despliegue el listado de productos" — el detalle pasó de listar una fila por cada combinación cliente+producto (podían ser decenas de líneas, como las 71 de la captura) a listar una fila por CLIENTE con el total de CANT/IMPORTE sumado de todos sus productos ese día+bucket, colapsada por defecto; recién al hacer clic en un cliente se despliegan debajo, indentados, sus productos individuales (PRODUCTO/CANT/IMPORTE, ordenados de mayor a menor importe). A diferencia del resto del tablero (que usa "una sola cosa activa a la vez"), acá se optó por permitir varios clientes desplegados simultáneamente (estDiaClienteExpandido es un Set, no un valor único) porque tiene sentido querer comparar el detalle de 2+ clientes de la misma fecha sin perder lo que ya se abrió — el usuario no pidió explícitamente "uno solo a la vez", así que se priorizó la flexibilidad. Implementación: (1) renderEstDiaDetalle(grupo,d,bucket) (antes recibía sólo d,bucket) ahora agrupa Object.values(d[bucket].det) por it.cliente en un objeto {cliente,cant,vta,productos:[]}, suma cant/vta de todos los productos de ese cliente, ordena los clientes por vta descendente y cada lista de productos también por vta descendente. (2) cada fila de cliente lleva data-cliente-toggle="grupo§§dayKey§§bucket§§cliente" (separador "§§" en vez de "|", porque un nombre de cliente jamás lo va a tener, evitando falsos matches) y un indicador ▸/▾ antes del nombre; al hacer clic se agrega/quita esa clave del Set global y se vuelve a renderizar. (3) si el cliente está expandido, se insertan sus filas de producto justo debajo de su fila (indentadas visualmente con texto más chico y atenuado en la columna PRODUCTO), dentro de la MISMA tabla — ya no hay una tabla anidada aparte. Verificación: se corrió un test aislado con jsdom que ejecuta las funciones EXACTAS computeEstadoDiario()/renderEstDiaDetalle()/renderEstadoDiario() de este archivo contra 2 clientes de muestra (Cliente A con 2 productos por $1.000+$500=$1.500, Cliente B con 1 producto por $3.000), y confirma con 16 aserciones: que ya no hay max-height ni overflow-y en el detalle, que se muestran 2 filas de cliente ordenadas de mayor a menor importe total (B antes que A), que el total de Cliente A suma correctamente sus 2 productos, que por defecto NINGÚN producto individual es visible (colapsado), que un clic en un cliente despliega sólo sus productos sin mezclar con el otro cliente, que se pueden tener 2 clientes desplegados a la vez, y que un segundo clic repliega ese cliente puntual sin afectar al otro que sigue abierto. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que se ve bien con una fecha que tenga muchos clientes (como el 24/08, con 71 líneas repartidas en varios clientes). Sin cambios en el plegado de la sección, los títulos de empresa, las cajas de color ni el criterio de "un solo bucket activo por vez" (que sigue igual, heredado del archivo 124) — sólo cambió lo que se ve DENTRO de ese detalle. Pedido 27/08/2026. -->
 <!-- - breve descripcion de lo hecho: el detalle que se despliega al hacer clic en Firmado/Ingresado o Reparto ya no tiene scroll interno (se ve la lista completa, aunque tenga muchas líneas) y ahora agrupa por cliente con su total — recién al hacer clic en un cliente puntual se despliega el detalle de sus productos, cantidad e importe; se pueden tener varios clientes abiertos a la vez para comparar. -->
+
+<!-- 127 - Dashboard ventas REM 2026 - boton de captura por tabla en Estado de remito: el usuario pidió (27/08/2026) retomar la idea del botón de captura de la versión única 123 (que sacaba una imagen de las 3 tablas de "Estado de remito" juntas), pero con un botón independiente por cada tabla de empresa en vez de uno solo combinado — adjuntó una captura mostrando un botón "📷 Capturar" en la esquina superior derecha de cada tabla (LUSTRAMAX, VYMAT). Aclaró explícitamente que este agregado SÍ debe tener todas las funcionalidades ya construidas hasta ahora (plegado del archivo 122, títulos de empresa más grandes del 122, cajas de color del 121, clic por bucket a todo el ancho del 124, detalle agrupado por cliente sin scroll del 125) — a diferencia de los archivos 123/126, que eran versiones únicas fuera de la línea de continuidad, ESTE pedido no fue marcado como "versión única", así que se entiende como parte de la línea de continuidad real: este archivo parte de la 125 (no de la 123) y pasa a ser la nueva punta de esa línea. Implementación: (1) se agregó html2canvas (CDN) al <head> — es la PRIMERA dependencia externa de JS que entra efectivamente a la línea de continuidad (118/123/126 usaron librerías externas pero quedaron fuera de esa numeración a pedido del usuario, así que no contaban). (2) cada bloque de empresa (el <div> que contiene el título + la tabla, ya generado por el archivo 122) ahora tiene id="estadoDiarioBloque_<slug>" (slug = nombre de la empresa sin espacios/símbolos, ej. "CIA__DE_HIGIENE") y, dentro suyo, un botón "Capturar" con ícono de cámara, posicionado con position:absolute en la esquina superior derecha (no ocupa espacio en el flujo, así el título no necesita dejarle hueco) y con data-capture-grupo="<nombre de la empresa>". Si una empresa no tiene remitos ese mes (bloque "Sin remitos en este período"), NO tiene botón — no hay nada que capturar. (3) función nueva captureEstadoTablaImage(grupo): llama a html2canvas() sobre el bloque COMPLETO de esa empresa (título + tabla), usando la opción "ignoreElements" de html2canvas para excluir específicamente el botón mismo de la captura (así la imagen no se saca a sí misma) — mismo criterio de fondo dinámico (color --panel del tema activo), escala 2x, y copiado al portapapeles vía Clipboard API (con fallback de descarga del PNG si el navegador no soporta copiar imágenes) que ya se había armado y verificado en la versión única 123, ahora aplicado a UN bloque puntual en vez de los 3 juntos. El nombre del archivo de fallback incluye el nombre de la empresa (ej. "Estado de remito - LUSTRAMAX - 20260827.png"). Verificación: se corrió un test aislado con jsdom que ejecuta las funciones EXACTAS renderEstadoDiario()/captureEstadoTablaImage() de este archivo, mockeando html2canvas/Clipboard API (jsdom no las implementa), y confirma con 15 aserciones: que cada empresa con datos tiene su propio bloque con id y botón (data-capture-grupo correcto), que CIA. DE HIGIENE (sin datos ese mes en los datos de prueba) no tiene bloque ni botón, que el botón está en position:absolute, que la función ignoreElements() efectivamente marca el botón para excluirlo pero NO la tabla, y que al capturar LUSTRAMAX html2canvas recibe específicamente el bloque de LUSTRAMAX (no el de VYMAT ni el wrap entero) — y viceversa al capturar VYMAT — dejando el botón de la otra empresa sin tocar ("Capturar", no "Copiado"). Además se corrió un test de REGRESIÓN completo confirmando que las 5 funcionalidades previas (plegado arrancando colapsado, chips sin tocar, títulos de empresa grandes, cajas de color por bucket, clic por bucket con detalle a todo el ancho, detalle agrupado por cliente colapsado por defecto) siguen funcionando exactamente igual después de este cambio, sin ninguna regresión. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo probar el botón de forma interactiva en un navegador real dentro de esta sesión (misma limitación de siempre). Pedido 27/08/2026. -->
+<!-- - breve descripcion de lo hecho: cada una de las 3 tablas de "Estado de remito" (Lustramax/Vymat/Cía. de Higiene) ahora tiene su propio botón de captura en la esquina superior derecha (en vez de un solo botón para las 3 juntas como en la versión 123) — genera y copia al portapapeles una imagen de esa tabla puntual (con su título), lista para pegar en WhatsApp. Se mantienen intactas todas las funcionalidades ya implementadas: el plegado, los títulos de empresa grandes, las cajas de color y el detalle agrupado por cliente al hacer clic en Firmado/Ingresado o Reparto. -->

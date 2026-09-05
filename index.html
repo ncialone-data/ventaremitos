@@ -632,6 +632,14 @@ const EJEC_ROWS=[];  // filas activas para seguimiento comerciales: {mes,rawcli,
 // grupo = 'LUSTRAMAX'|'VYMAT'|'CIA. DE HIGIENE' (vía EMP_GRUPO_OF); bucket = 'FI' (Firmada+
 // Ingresada fundidas) | 'RE' (Reparto).
 const ESTREM_ROWS=[];
+// NUEVO — pedido 05/09/2026: detalle día a día de la tarjeta "Venta activa · sin NDCs",
+// para la vista diaria/mensual que se despliega al hacer clic en esa tarjeta. A diferencia
+// de ESTREM_ROWS (que excluye Tránsito/Anulada y funde Firmada+Ingresada en un bucket "FI"),
+// acá se guardan los 4 estados por separado (Firmada/Ingresada/Reparto/Transito) y SIN
+// agrupar por los 3 bloques fijos de empresa — es un detalle plano, filtrable por
+// empGrupoFilter/empFilter/rubFilter igual que el resto del tablero. Ver processRawRows().
+// {mes,day,emp,rub,estado,cliente,vta}
+const KPIVTA_ROWS=[];
 let estDiaActiva=null; // {grupo,dayKey} del día actualmente desplegado en "Estado de remito" (uno solo a la vez)
 // Clientes expandidos dentro del detalle de un día/bucket de "Estado de remito" (pedido
 // 27/08/2026: el detalle ahora agrupa por CLIENTE con su total, y sólo al hacer clic en un
@@ -655,6 +663,12 @@ let motivoActivo=null;    // motivo seleccionado en "Motivos resumen" (clic en u
 // KPI superiores clickeables (Venta activa con/sin NDCs, Clientes únicos/nuevos) — pedido
 // 19/08/2026. Una sola tarjeta desplegada a la vez (mismo patrón que ndcActiveCard/pendActiveCard).
 let kpiActiveCard=null;   // 'ventaNdc' | 'ventaSinNdc' | 'cliUnicos' | 'cliNuevos' | null
+// NUEVO — pedido 05/09/2026: la tarjeta "Venta activa · sin NDCs" tiene, dentro de su
+// detalle desplegable, un switch propio "vista diaria" / "vista mensual" (no afecta a las
+// otras 3 tarjetas clickeables, que siguen mostrando su listado simple de siempre).
+let kpiVentaVista='diaria'; // 'diaria' | 'mensual' — se mantiene aunque se cierre/reabra la tarjeta
+let kpiDiaVtaActivo=null;   // dayKey ("mes|day") del día desplegado en la vista diaria (uno solo a la vez)
+let kpiClienteTransitoActivo=null; // cliente con el detalle "mes actual/acumulado anterior" desplegado en vista mensual (uno solo a la vez)
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
@@ -675,6 +689,20 @@ function render(){
   const Rfirm=R.filter(d=>ACTIVOS.includes(d.e));
   const totalVta=Rfirm.reduce((s,d)=>s+d.v,0);
   const totalCos=Rfirm.reduce((s,d)=>s+d.o,0);
+  // NUEVO — pedido 03/09/2026 (Ezequiel): la tarjeta "Venta activa · sin NDCs" (2da tarjeta
+  // KPI) debe sumar TAMBIÉN todo el Tránsito acumulado hasta la fecha, sin importar si es del
+  // mes filtrado o de meses anteriores — la idea es que el número muestre TODO lo que sigue
+  // pendiente de entrega en tránsito, para presionar a los sectores involucrados a despacharlo,
+  // independientemente de qué mes se esté mirando en el resto del tablero. Se calcula APARTE de
+  // totalVta (que sigue sin tocarse, sigue respetando mesFilter y excluyendo Tránsito, porque de
+  // ahí siguen tomando datos "Objetivo mensual", "Margen bruto", la tarjeta "Venta activa · con
+  // NDCs", "Clientes" y "Mix" — ver pedido 29/07/2026 más arriba). Respeta empGrupoFilter/
+  // empFilter/rubFilter (si se filtra por una empresa, el Tránsito sumado es sólo el de esa
+  // empresa — confirmado por multiple choice), pero IGNORA mesFilter a propósito, usando
+  // rowsNoMes() (ya existente, usada en otras partes del tablero con el mismo fin).
+  const RTransitoAcum=rowsNoMes().filter(d=>d.e==='Transito');
+  const totalTransitoAcum=RTransitoAcum.reduce((s,d)=>s+d.v,0);
+  const totalVtaSinNdcConTransito=totalVta+totalTransitoAcum;
   // Venta NETA de NDC (Notas de Crédito/Débito) — pedido 04/08/2026: la venta bruta de
   // remitos no contempla las notas de crédito/débito generadas para esos remitos. Se suma
   // el neto de NDC (créditos negativos + débitos positivos) del/los mes(es) visibles,
@@ -766,9 +794,13 @@ function render(){
     // Tarjeta nueva — pedido 19/08/2026: misma "venta activa" (sin Tránsito) pero SIN
     // descontar el neto de NDC, para poder comparar bruto vs. neto a simple vista. Usa
     // totalVta (no totalVtaNeto), calculado más arriba antes de sumarle ndcAdjVenta.
+    // ACTUALIZADO — pedido 03/09/2026 (Ezequiel): ahora muestra totalVtaSinNdcConTransito
+    // (totalVta del mes filtrado + TODO el Tránsito acumulado, sin importar su fecha — ver
+    // comentario más arriba), y el subtítulo pasa de "sin Tránsito" a "incl. Tránsito
+    // acumulado" para que no diga lo contrario de lo que el número ya muestra.
     `<div class="kpi acc pend-clickable" data-card="ventaSinNdc"><div class="k-lbl">Venta activa</div>
-      <div class="k-val full">${fmtFull(totalVta)}</div>
-      <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito · sin NDCs</div></div>`+
+      <div class="k-val full">${fmtFull(totalVtaSinNdcConTransito)}</div>
+      <div class="k-sub">${empFilter||'todas las empresas'} · incl. Tránsito acumulado · sin NDCs</div></div>`+
     objCard+momCard+
     `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
       <div class="k-val">${fmtPct(margenAvg)}</div>
@@ -1448,6 +1480,7 @@ function processRawRows(rawRows, sourceName) {
   EJEC_ROWS.length=0;
   FAM_ROWS.length=0;
   ESTREM_ROWS.length=0;
+  KPIVTA_ROWS.length=0;
   for(const k in ORIG_AGG)delete ORIG_AGG[k];
   for(const k in ORIG_DAYAGG)delete ORIG_DAYAGG[k];
   const _seenComp=new Set();
@@ -1483,6 +1516,10 @@ function processRawRows(rawRows, sourceName) {
     const cos = _n(r['COSTO IMPORTE']);
     const qty = _n(r['CANTIDAD']);
     if(['Firmada','Ingresada','Reparto','Transito'].includes(estado)){
+      // NUEVO — pedido 05/09/2026: detalle día a día para la tarjeta "Venta activa · sin
+      // NDCs" (vista diaria/mensual). A diferencia del bloque de ESTREM_ROWS más abajo, este
+      // SÍ incluye Tránsito, y guarda cada estado por separado (sin fundir Firmada+Ingresada).
+      KPIVTA_ROWS.push({mes,day:dayNum,emp,rub,estado,cliente:cli,vta});
       // DAYAGG alimenta el KPI "vs. mes anterior": ya NO contempla Transito (pedido 29/07/2026).
       // Los gauges por fábrica (ORIG_AGG/ORIG_DAYAGG) y Seguimiento comerciales (EJEC_ROWS), más
       // abajo en este mismo bloque, siguen incluyendo Transito sin cambios.
@@ -2428,6 +2465,14 @@ function computeKpiClientList(kind){
       });
     }
   }
+  if(kind==='ventaSinNdc'){
+    // NUEVO — pedido 03/09/2026 (Ezequiel): el detalle por cliente de esta tarjeta debe
+    // coincidir con el número de arriba (totalVtaSinNdcConTransito), así que se le suma el
+    // mismo Tránsito acumulado de TODAS las fechas (vía rowsNoMes(), respeta empGrupoFilter/
+    // empFilter/rubFilter pero ignora mesFilter a propósito — confirmado por multiple choice).
+    const RTransitoAcum=rowsNoMes().filter(d=>d.e==='Transito');
+    RTransitoAcum.forEach(d=>{ map[d.c]=(map[d.c]||0)+d.v; });
+  }
   let list=Object.entries(map).map(([cliente,importe])=>({cliente,importe}));
   if(kind==='cliNuevos'){
     if(!mesFilter) return [];
@@ -2444,10 +2489,350 @@ function computeKpiClientList(kind){
   list.sort((a,b)=>b.importe-a.importe);
   return list;
 }
+
+// ── "Venta activa · sin NDCs" — vista diaria/mensual (pedido 05/09/2026, Ezequiel) ────────
+// Reemplaza, SÓLO para la tarjeta data-card="ventaSinNdc", el listado plano CLIENTE/IMPORTE
+// de computeKpiClientList por 2 vistas con columna por estado (Firmada/Ingresada/Reparto/
+// Tránsito/Total), alternables con un switch: "vista diaria" (por día, clic en un día
+// despliega sus clientes) y "vista mensual" (por cliente, de mayor a menor). Las otras 3
+// tarjetas clickeables (ventaNdc, cliUnicos, cliNuevos) NO se tocan, siguen usando
+// computeKpiClientList()/el listado simple de siempre.
+
+function kpiVentaRowsFiltradas(){
+  // KPIVTA_ROWS respetando empGrupoFilter/empFilter/rubFilter — IGNORA mesFilter a propósito
+  // (cada vista decide por su cuenta qué hacer con el mes, ver funciones de abajo).
+  let r=KPIVTA_ROWS;
+  if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.emp));}
+  if(empFilter)r=r.filter(d=>d.emp===empFilter);
+  if(rubFilter)r=r.filter(d=>d.rub===rubFilter);
+  return r;
+}
+const _campoEstado=e=>e==='Firmada'?'firmada':e==='Ingresada'?'ingresada':e==='Reparto'?'reparto':'transito';
+const _mkEstadoRow=()=>({firmada:0,ingresada:0,reparto:0,transito:0});
+const _totEstadoRow=r=>r.firmada+r.ingresada+r.reparto+r.transito;
+const KEY_OTROS_MESES='__OTROS_MESES__'; // pseudo-clave de día para la fila "Tránsito de otros meses"
+
+function computeVentaSinNdcDiario(){
+  // Firmada/Ingresada/Reparto: sólo días DENTRO del mes filtrado (o todo el año si no hay
+  // mes elegido). Tránsito: si su fecha cae DENTRO del mes filtrado, se suma al día real;
+  // si cae FUERA (mes anterior), se acumula aparte por cliente en clientesOtrosMeses (para
+  // poder desplegar esa fila especial también — pedido 05/09/2026) — así el Total general de
+  // esta vista siempre coincide con el número grande de la tarjeta (totalVtaSinNdcConTransito).
+  const rowsAll=kpiVentaRowsFiltradas();
+  const dias={};
+  let transitoOtrosMeses=0;
+  const clientesOtrosMeses={};
+  rowsAll.forEach(d=>{
+    const dentroDelMes=!mesFilter||d.mes===mesFilter;
+    if(d.estado==='Transito'&&!dentroDelMes){
+      transitoOtrosMeses+=d.vta;
+      clientesOtrosMeses[d.cliente]=(clientesOtrosMeses[d.cliente]||0)+d.vta;
+      return;
+    }
+    if(!dentroDelMes) return;
+    const dayKey=`${d.mes}|${d.day}`;
+    if(!dias[dayKey])dias[dayKey]={mes:d.mes,day:d.day,tot:_mkEstadoRow(),clientes:{}};
+    const campo=_campoEstado(d.estado);
+    dias[dayKey].tot[campo]+=d.vta;
+    if(!dias[dayKey].clientes[d.cliente])dias[dayKey].clientes[d.cliente]=_mkEstadoRow();
+    dias[dayKey].clientes[d.cliente][campo]+=d.vta;
+  });
+  return {dias,transitoOtrosMeses,clientesOtrosMeses};
+}
+
+function computeVentaSinNdcMensual(){
+  // Firmada/Ingresada/Reparto: respeta mesFilter (o todo el año), vía rows()/DATA — igual
+  // que el resto del tablero. Tránsito: SIEMPRE acumulado de TODAS las fechas, vía
+  // rowsNoMes() — confirmado por multiple choice 05/09/2026, coherente con el número grande
+  // de la tarjeta y con computeKpiClientList('ventaSinNdc'). Además (pedido 05/09/2026) se
+  // separa el Tránsito de cada cliente en transitoMesActual (fecha dentro de mesFilter) y
+  // transitoAnterior (fecha fuera de mesFilter) — sólo para poder mostrar la referencia
+  // visual y el detalle "mes actual / acumulado anterior" en la vista mensual; el total de
+  // Tránsito (suma de ambos) no cambia.
+  const map={};
+  rows().forEach(d=>{
+    if(!['Firmada','Ingresada','Reparto'].includes(d.e))return;
+    if(!map[d.c])map[d.c]={..._mkEstadoRow(),transitoMesActual:0,transitoAnterior:0};
+    map[d.c][d.e==='Firmada'?'firmada':d.e==='Ingresada'?'ingresada':'reparto']+=d.v;
+  });
+  rowsNoMes().filter(d=>d.e==='Transito').forEach(d=>{
+    if(!map[d.c])map[d.c]={..._mkEstadoRow(),transitoMesActual:0,transitoAnterior:0};
+    map[d.c].transito+=d.v;
+    if(!mesFilter||d.m===mesFilter) map[d.c].transitoMesActual+=d.v;
+    else map[d.c].transitoAnterior+=d.v;
+  });
+  const list=Object.entries(map).map(([cliente,r])=>({cliente,...r,total:_totEstadoRow(r)}));
+  list.sort((a,b)=>b.total-a.total);
+  return list;
+}
+
+// Fila de "día" genérica (real o la especial de "Tránsito de otros meses") — misma
+// estructura de columnas y mismo mecanismo de expandir/colapsar (data-daykey), para no
+// duplicar el marcado y evitar el tipo de desalineación de columnas que tuvimos antes.
+function _filaDiaHtml(key,label,tot,clientesMap,{especial=false}={}){
+  const open=kpiDiaVtaActivo===key;
+  const cel=(v)=>`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px">${v?fmtFull(v):'—'}</td>`;
+  const celCli=(v)=>`<td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px">${v?fmtFull(v):'—'}</td>`;
+  const clientesList=Object.entries(clientesMap)
+    .map(([cliente,r])=>({cliente,...r,total:_totEstadoRow(r)}))
+    .sort((a,b)=>b.total-a.total);
+  const clienteRows=open?clientesList.map(c=>`<tr style="border-bottom:1px solid var(--line)">
+    <td></td>
+    <td style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+    ${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${celCli(c.transito)}
+    <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600">${fmtFull(c.total)}</td>
+  </tr>`).join(''):'';
+  return `<tr data-daykey="${key}" style="cursor:pointer;border-bottom:1px solid var(--line);${especial?'font-style:italic;color:var(--mut2);':''}${open?'background:rgba(96,165,250,.08)':''}">
+    <td colspan="2" style="padding:6px 8px;font-size:12px;font-weight:600">${open?'▾':'▸'} ${label}</td>
+    ${cel(tot.firmada)}${cel(tot.ingresada)}${cel(tot.reparto)}${cel(tot.transito)}
+    <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700">${fmtFull(_totEstadoRow(tot))}</td>
+  </tr>${clienteRows}`;
+}
+
+function renderVentaSinNdcDiariaBody(){
+  const {dias,transitoOtrosMeses,clientesOtrosMeses}=computeVentaSinNdcDiario();
+  const dayKeys=Object.keys(dias).sort((a,b)=>{
+    const[ma,da]=a.split('|'),[mb,db]=b.split('|');
+    return ma===mb?(+da-+db):(ma<mb?-1:1);
+  });
+  if(!dayKeys.length&&transitoOtrosMeses<=0){
+    return `<div style="font-size:12px;color:var(--mut)">Sin datos para este período/filtro.</div>`;
+  }
+  const fmtDay=k=>{const[mes,day]=k.split('|');return `${day.toString().padStart(2,'0')}-${(MLBL[mes]||mes)}`;};
+  const totGen=_mkEstadoRow();
+  const rowsHtml=dayKeys.map(k=>{
+    const d=dias[k];
+    totGen.firmada+=d.tot.firmada; totGen.ingresada+=d.tot.ingresada;
+    totGen.reparto+=d.tot.reparto; totGen.transito+=d.tot.transito;
+    return _filaDiaHtml(k,fmtDay(k),d.tot,d.clientes);
+  }).join('');
+  // Fila especial de "Tránsito de otros meses": ahora TAMBIÉN se puede plegar/desplegar
+  // (pedido 05/09/2026) y muestra el listado de clientes con su total al abrirla, igual que
+  // un día real — sólo que sus columnas Firmada/Ingresada/Reparto quedan en "—" (no aplica).
+  const filaOtrosMeses=transitoOtrosMeses>0
+    ?_filaDiaHtml(KEY_OTROS_MESES,'Tránsito de otros meses',{firmada:0,ingresada:0,reparto:0,transito:transitoOtrosMeses},
+        Object.fromEntries(Object.entries(clientesOtrosMeses).map(([c,v])=>[c,{firmada:0,ingresada:0,reparto:0,transito:v}])),
+        {especial:true})
+    :'';
+  totGen.transito+=transitoOtrosMeses;
+  // Sin scroll interno (pedido 05/09/2026): la tabla crece con el contenido, sin
+  // max-height/overflow-y — igual criterio que ya se usa en "Estado de remito" (archivo 125).
+  return `<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+      <colgroup><col style="width:12%"><col style="width:26%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:10%"></colgroup>
+      <thead><tr style="border-bottom:1px solid var(--line2)">
+        <th colspan="2" style="padding:5px 8px;text-align:left;font-weight:600">FECHA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">FIRMADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">INGRESADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">REPARTO</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">TRANSITO</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">TOTAL</th>
+      </tr></thead>
+      <tbody>${rowsHtml}${filaOtrosMeses}</tbody>
+      <tfoot><tr style="border-top:2px solid var(--line2);font-weight:700">
+        <td colspan="2" style="padding:6px 8px">Total general</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.firmada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ingresada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.reparto)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.transito)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(_totEstadoRow(totGen))}</td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function renderVentaSinNdcMensualBody(){
+  const list=computeVentaSinNdcMensual();
+  if(!list.length) return `<div style="font-size:12px;color:var(--mut)">Sin clientes para este período/filtro.</div>`;
+  const cel=(v)=>`<td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${v?fmtFull(v):'—'}</td>`;
+  const totGen=list.reduce((s,c)=>({firmada:s.firmada+c.firmada,ingresada:s.ingresada+c.ingresada,reparto:s.reparto+c.reparto,transito:s.transito+c.transito}),_mkEstadoRow());
+  // Referencia visual (pedido 05/09/2026): un puntito ámbar junto al importe de TRANSITO
+  // cuando ese total incluye algo de meses anteriores (transitoAnterior>0) — si el Tránsito
+  // de ese cliente es 100% del mes activo, no se muestra nada especial. Clic en TODA la fila
+  // del cliente (si tiene transitoAnterior>0) despliega 2 líneas: "Mes actual" y "Acumulado
+  // meses anteriores", que suman exactamente el importe de la columna TRANSITO.
+  const celTransito=(c)=>{
+    const tieneAnterior=c.transitoAnterior>0;
+    const dot=tieneAnterior?`<span title="Incluye Tránsito de meses anteriores" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f59e0b;margin-right:5px;vertical-align:middle"></span>`:'';
+    return `<td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${dot}${c.transito?fmtFull(c.transito):'—'}</td>`;
+  };
+  const rowsHtml=list.map(c=>{
+    const tieneAnterior=c.transitoAnterior>0;
+    const open=tieneAnterior&&kpiClienteTransitoActivo===c.cliente;
+    const detalle=open?`<tr style="border-bottom:1px solid var(--line);background:rgba(245,158,11,.06)">
+      <td colspan="6" style="padding:6px 8px 8px 24px">
+        <div style="display:flex;gap:24px;font-size:11px;color:var(--mut2)">
+          <span>Mes actual: <b style="color:var(--tx);font-family:'IBM Plex Mono',monospace">${fmtFull(c.transitoMesActual)}</b></span>
+          <span>Acumulado meses anteriores: <b style="color:#f59e0b;font-family:'IBM Plex Mono',monospace">${fmtFull(c.transitoAnterior)}</b></span>
+        </div>
+      </td>
+    </tr>`:'';
+    return `<tr data-cli-transito="${tieneAnterior?c.cliente:''}" style="${tieneAnterior?'cursor:pointer;':''}border-bottom:1px solid var(--line)${open?';background:rgba(245,158,11,.06)':''}">
+      <td style="padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+      ${cel(c.firmada)}${cel(c.ingresada)}${cel(c.reparto)}${celTransito(c)}
+      <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600">${fmtFull(c.total)}</td>
+    </tr>${detalle}`;
+  }).join('');
+  // Sin scroll interno (pedido 05/09/2026), igual que la vista diaria.
+  return `<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+      <colgroup><col style="width:34%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:10%"></colgroup>
+      <thead><tr style="border-bottom:1px solid var(--line2)">
+        <th style="padding:5px 8px;text-align:left;font-weight:600">CLIENTE</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">FIRMADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">INGRESADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">REPARTO</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">TRANSITO</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">TOTAL</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+      <tfoot><tr style="border-top:2px solid var(--line2);font-weight:700">
+        <td style="padding:6px 8px">Total general</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.firmada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ingresada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.reparto)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.transito)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(_totEstadoRow(totGen))}</td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function renderVentaSinNdcDetalle(wrap){
+  const periodoTxt=mesFilter?(MLBL[mesFilter]||mesFilter):'año completo';
+  // Switch "vista diaria/mensual" — pedido 05/09/2026: reutiliza las MISMAS clases "seg"/
+  // "on" que ya usan los filtros de Período/Empresa/Rubro de arriba (en vez de estilos
+  // propios), para que la paleta de colores sea idéntica (incluye el estilo de modo claro,
+  // que pinta el botón activo de azul marino #1e3a5f con texto blanco — antes este switch
+  // usaba var(--acc)/texto oscuro siempre, sin importar el tema, por eso no combinaba con
+  // el resto del tablero en modo claro). Sólo se ajusta el tamaño (más chico) por encima.
+  const switchBtn=(v,lbl)=>`<button type="button" data-vista="${v}" class="${kpiVentaVista===v?'on':''}" style="padding:4px 10px;font-size:10.5px">${lbl}</button>`;
+  // Etiqueta del switch (pedido 05/09/2026): "Vista mensual" pasa a decir "Vista clientes" —
+  // sólo cambia el texto visible del botón; el valor interno de kpiVentaVista sigue siendo
+  // 'mensual' (no se tocó el estado ni ninguna lógica de computeVentaSinNdcMensual/
+  // renderVentaSinNdcMensualBody, que ya listan por cliente — el nombre nuevo simplemente
+  // describe mejor lo que esa vista muestra).
+  const switchHtml=`<span class="seg" style="padding:3px;gap:2px;border-radius:8px;vertical-align:middle;margin-left:10px">${switchBtn('diaria','Vista diaria')}${switchBtn('mensual','Vista clientes')}</span>`;
+  const body=kpiVentaVista==='diaria'?renderVentaSinNdcDiariaBody():renderVentaSinNdcMensualBody();
+  // Botón de captura (pedido 05/09/2026, mismo mecanismo html2canvas ya usado en "Estado de
+  // remito" desde el archivo 127/127b). AJUSTE 05/09/2026 (mismo día, 2do pedido, con captura
+  // anotada mostrando el botón desalineado respecto del título/switch/período): en el archivo
+  // 133 el botón iba con position:absolute y un offset fijo (top:12px), lo que lo despegaba del
+  // resto de la fila —acá el título va acompañado de un switch (una fila más alta que un título
+  // simple de texto), así que un offset fijo no queda centrado con el resto. Se reemplaza por un
+  // layout de flexbox normal: el botón pasa a vivir DENTRO de c-head, en el mismo grupo que el
+  // período (ambos dentro de un <span> con display:flex;align-items:center), así el botón queda
+  // SIEMPRE perfectamente alineado verticalmente con el título/switch de la izquierda y el
+  // período de la derecha, sea cual sea la altura real de esa fila — sin necesidad de números
+  // mágicos, y válido tanto en vista diaria como en vista mensual (la fila no cambia de alto
+  // entre vistas, pero de esta forma tampoco importaría si cambiara).
+  const captureBtnHtml=`<button type="button" data-capture-venta="1" title="Capturar esta tabla como imagen (para pegar en WhatsApp)" style="display:inline-flex;align-items:center;gap:6px;padding:4px 9px;font-size:10.5px;font-weight:600;color:var(--tx);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;cursor:pointer;flex-shrink:0">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    <span class="captureBtnLbl">Capturar</span>
+  </button>`;
+  wrap.innerHTML=`<div class="card" id="ventaSinNdcCardBlock" style="margin-top:0;margin-bottom:14px">
+    <div class="c-head" style="margin-bottom:10px;align-items:center">
+      <span class="c-title">Venta activa · sin NDCs${switchHtml}</span>
+      <span style="display:flex;align-items:center;gap:12px">
+        <span class="c-note">${periodoTxt}</span>
+        ${captureBtnHtml}
+      </span>
+    </div>
+    ${body}
+  </div>`;
+  wrap.querySelectorAll('button[data-vista]').forEach(btn=>{
+    btn.onclick=()=>{ kpiVentaVista=btn.dataset.vista; renderKpiDetalle(); };
+  });
+  wrap.querySelectorAll('tr[data-daykey]').forEach(tr=>{
+    tr.onclick=()=>{
+      const k=tr.dataset.daykey;
+      kpiDiaVtaActivo=(kpiDiaVtaActivo===k)?null:k;
+      renderKpiDetalle();
+    };
+  });
+  wrap.querySelectorAll('tr[data-cli-transito]').forEach(tr=>{
+    const cli=tr.dataset.cliTransito;
+    if(!cli) return; // fila sin Tránsito de meses anteriores: no es clickeable
+    tr.onclick=()=>{
+      kpiClienteTransitoActivo=(kpiClienteTransitoActivo===cli)?null:cli;
+      renderKpiDetalle();
+    };
+  });
+  const capBtn=wrap.querySelector('button[data-capture-venta]');
+  if(capBtn) capBtn.onclick=()=>captureVentaSinNdcImage();
+}
+// Captura la tarjeta "Venta activa · sin NDCs" (título+switch+tabla, sin el propio botón) como
+// PNG y lo copia al portapapeles para pegar en WhatsApp — pedido 05/09/2026, misma mecánica ya
+// verificada en captureEstadoTablaImage() (html2canvas con ignoreElements para excluir el botón,
+// fondo dinámico según el tema activo, copiado al portapapeles con fallback de descarga del PNG
+// si el navegador no soporta Clipboard API). Como la tabla ya se renderiza completa (sin scroll
+// interno) con cualquier fila desplegada en ese momento, capturar el bloque entero alcanza para
+// que "si hay algo desplegado, esté incluído en la captura" tal como pidió el usuario.
+async function captureVentaSinNdcImage(){
+  const bloque=document.getElementById('ventaSinNdcCardBlock');
+  const btn=bloque?bloque.querySelector('button[data-capture-venta]'):null;
+  const lbl=btn?btn.querySelector('.captureBtnLbl'):null;
+  if(typeof html2canvas==='undefined'){
+    alert('No se pudo cargar la librería para generar la imagen (html2canvas) desde internet. Revisá tu conexión e intentá de nuevo — el resto del tablero funciona igual sin esto.');
+    return;
+  }
+  if(!bloque){
+    alert('No se encontró la tabla de Venta activa para capturar.');
+    return;
+  }
+  if(btn)btn.disabled=true;
+  if(lbl)lbl.textContent='Generando...';
+  try{
+    const bg=getComputedStyle(document.body).getPropertyValue('--panel').trim()||'#11141c';
+    const canvas=await html2canvas(bloque,{
+      backgroundColor:bg,
+      scale:2,
+      useCORS:true,
+      width:bloque.scrollWidth,
+      height:bloque.scrollHeight,
+      windowWidth:bloque.scrollWidth,
+      windowHeight:bloque.scrollHeight,
+      ignoreElements:(el)=>el.hasAttribute&&el.hasAttribute('data-capture-venta')
+    });
+    canvas.toBlob(async blob=>{
+      if(!blob){
+        if(lbl)lbl.textContent='Capturar';
+        if(btn)btn.disabled=false;
+        alert('No se pudo generar la imagen. Probá de nuevo.');
+        return;
+      }
+      let copiado=false;
+      try{
+        if(navigator.clipboard&&window.ClipboardItem){
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          copiado=true;
+        }
+      }catch(e){ copiado=false; }
+      if(copiado){
+        if(lbl)lbl.textContent='¡Copiado! ✓';
+      } else {
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        const hoy=new Date();
+        const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
+        const vistaStr=kpiVentaVista==='diaria'?'diaria':'mensual';
+        a.href=url; a.download=`Venta activa sin NDCs - ${vistaStr} - ${fechaStr}.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),3000);
+        if(lbl)lbl.textContent='Descargada ⬇';
+      }
+      if(btn)btn.disabled=false;
+      setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
+    },'image/png');
+  }catch(err){
+    console.error('captureVentaSinNdcImage error',err);
+    if(lbl)lbl.textContent='Capturar';
+    if(btn)btn.disabled=false;
+    alert('No se pudo generar la imagen. Probá de nuevo.');
+  }
+}
+
 function renderKpiDetalle(){
   const wrap=document.getElementById('kpiDetalleWrap');
   if(!wrap) return;
   if(!kpiActiveCard){ wrap.innerHTML=''; return; }
+  if(kpiActiveCard==='ventaSinNdc'){ renderVentaSinNdcDetalle(wrap); return; }
   const TITULOS={
     ventaNdc:'Venta activa · con NDCs', ventaSinNdc:'Venta activa · sin NDCs',
     cliUnicos:'Clientes únicos', cliNuevos:'Clientes nuevos'
@@ -3562,3 +3947,21 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 129 - Dashboard ventas REM 2026 - correccion alineacion columnas detalle comprobante: el usuario reportó (27/08/2026, con una captura del bloque LUSTRAMAX mostrando el detalle de Reparto expandido para "PACKING S.R.L.") que tras el archivo 128 los encabezados y los datos de la tabla de detalle de cliente quedaron "completamente desalineados", pidiendo específicamente: (1) corregir la alineación de datos bajo IMPORTE/CANT/PRODUCTO, aclarando que esos 3 encabezados ya estaban en la ubicación correcta (el problema era sólo de los DATOS, no de dónde caían los títulos); (2) acercar la columna COMPROBANTE hacia CLIENTE. Diagnóstico (revisando el código de renderEstDiaDetalle() del archivo 128 sin necesidad de preguntarle nada al usuario, la causa quedaba clara comparando el <colgroup> de 5 columnas contra la cantidad real de <td> de cada fila): (a) en las filas de PRODUCTO (las que se despliegan al hacer clic en un cliente), al agregar la columna COMPROBANTE en el archivo 128 se REEMPLAZÓ por error la celda vacía que ocupaba el lugar de CLIENTE (esa fila no repite el nombre del cliente, sólo deja la celda en blanco) en vez de agregarse como una celda adicional — el resultado eran sólo 4 <td> para 5 columnas declaradas en el <colgroup>, así que cada valor caía una columna a la izquierda de su encabezado real (COMPROBANTE se veía bajo CLIENTE, PRODUCTO bajo COMPROBANTE, CANT bajo PRODUCTO, IMPORTE bajo CANT, y la columna IMPORTE real quedaba vacía) — exactamente lo que el usuario reportó viendo en su captura para "REM A 0004-00142758"/"REM A 0004-00142759". (b) en la fila de RESUMEN del cliente (la que se ve siempre, con el total de CANT/IMPORTE), el archivo 128 usaba colspan="2" (para fusionar sólo CLIENTE+COMPROBANTE) seguido de 2 <td> más para CANT/IMPORTE — pero como el <colgroup> ahora tiene 5 columnas, colspan="2" sólo cubre las columnas 1-2, dejando que el <td> de CANT caiga en la columna 3 (el 30% de PRODUCTO) y el de IMPORTE en la columna 4 (el 12% de CANT), con la columna 5 (IMPORTE real, 16%) completamente vacía a la derecha — mismo patrón de corrimiento a la izquierda que reportó el usuario para el total de PACKING S.R.L. ("900 $7.835.371" corrido respecto a los encabezados). Implementación: (1) fila de PRODUCTO: se restauró la celda vacía de CLIENTE como PRIMER <td> (antes de COMPROBANTE), completando así los 5 <td> que exige el <colgroup> de 5 columnas — ahora CLIENTE(vacío)/COMPROBANTE/PRODUCTO/CANT/IMPORTE caen cada uno exactamente bajo su encabezado. (2) fila de RESUMEN del cliente: colspan="2" pasó a colspan="3" (fusiona CLIENTE+COMPROBANTE+PRODUCTO en una sola celda ancha con el nombre del cliente y "N productos", ya que ninguna de esas 3 tiene sentido a nivel resumen) seguido de los 2 <td> de CANT/IMPORTE, que ahora sí caen en las columnas 4 y 5 reales — el total del cliente queda alineado exactamente bajo los encabezados CANT/IMPORTE. (3) columna COMPROBANTE acercada a CLIENTE, a pedido explícito del usuario: se angostó de 16% a 14% de ancho (compensado ensanchando PRODUCTO de 30% a 34%, y CLIENTE se angostó levemente de 26% a 22%, e IMPORTE de 16% a 18% para no perder legibilidad de los importes grandes — el <colgroup> sigue sumando 100%), se cambió su alineación de texto de derecha a IZQUIERDA (antes quedaba pegada al borde derecho de su columna, lejos de CLIENTE; ahora arranca pegada al borde izquierdo, inmediatamente después de CLIENTE) y se redujo su padding horizontal de 10px a 6px tanto en el encabezado como en los datos — visualmente el número de comprobante ahora queda mucho más próximo al nombre del cliente que antes. No se tocaron PRODUCTO/CANT/IMPORTE en cuanto a alineación de texto (siguen exactamente como en el archivo 128: PRODUCTO a la izquierda, CANT e IMPORTE a la derecha), sólo se corrigió que sus DATOS caigan en la columna correcta, tal como pidió el usuario. Verificación: dado que jsdom dejó de responder en este sandbox durante esta sesión (el require('jsdom') no terminaba ni con timeout extendido, algo no visto en los archivos anteriores de este mismo proyecto), se verificó de forma estructural directamente sobre el HTML generado con un script de Node dedicado (sin DOM real): se extrajo el <colgroup> y se confirmó que sus 5 anchos suman 100%: 22/14/34/12/18; se extrajo el template literal de la fila de PRODUCTO y se contó exactamente 5 "<td" (antes 4), confirmando que la primera celda es el placeholder vacío de CLIENTE; se confirmó que la celda de COMPROBANTE en esa fila usa text-align:left y padding de 6px (antes right/10px); se extrajo el template de la fila de RESUMEN del cliente y se contó exactamente 3 "<td" con colspan="3" en el primero (antes colspan="2" con 3 <td> en total, que ahora hubiera dejado 4 columnas cubiertas en vez de las 3+2 correctas); se extrajo el <thead> y se confirmó que sigue teniendo los 5 encabezados CLIENTE/COMPROBANTE/PRODUCTO/CANT/IMPORTE en ese orden, con COMPROBANTE ahora también text-align:left (para que encabezado y dato queden alineados entre sí, ya que antes el encabezado estaba a la derecha y eso también contribuía a la sensación de desalineación). También se corrió el chequeo de sintaxis completo del archivo con Node (new Function sobre el <script> completo), sin errores. No se pudo renderizar visualmente en un navegador real dentro de esta sesión (misma limitación documentada en archivos anteriores, agravada acá por la falla puntual de jsdom) — el ajuste queda fundamentado en la revisión exhaustiva del conteo de columnas/anchos, pero conviene que el usuario confirme con una captura nueva que ahora sí ve IMPORTE/CANT/PRODUCTO alineados bajo sus encabezados y que COMPROBANTE quedó suficientemente cerca de CLIENTE, o si prefiere que se acerque todavía más. Sin cambios en el plegado, los títulos de empresa, las cajas de color, el clic por bucket, los botones de captura por tabla ni la agrupación por cliente (heredados intactos del archivo 128); tampoco se tocó computeEstadoDiario() (la lógica de acumulación de comprobantes por línea de producto ya era correcta desde el archivo 128, el problema era exclusivamente de marcado HTML en renderEstDiaDetalle()). Pedido 27/08/2026. -->
 <!-- - breve descripcion de lo hecho: se corrigió la desalineación de columnas del detalle de productos por cliente que había quedado en el archivo 128 — ahora PRODUCTO, CANT e IMPORTE (tanto en el total de cada cliente como en el detalle de cada producto) caen exactamente bajo sus encabezados. Además, la columna COMPROBANTE se angostó, se alineó a la izquierda y se acercó a CLIENTE, tal como pediste. Avisame con una captura si ahora se ve bien o si querés que COMPROBANTE quede todavía más pegado a CLIENTE. -->
+
+<!-- 130 - Dashboard ventas REM 2026 - Venta activa sin NDCs incluye Transito acumulado: el usuario pidió (03/09/2026) que la 2da tarjeta KPI de la fila superior ("Venta activa · $158.338.271 · todas las empresas · sin Tránsito · sin NDCs") muestre el total de ventas incluyendo TODOS los remitos que están en estado Tránsito, independientemente de su fecha (sean del mes filtrado en el tablero o de meses anteriores) — explicó que esto responde a un pedido de Ezequiel, que quiere ver el acumulado absoluto de lo que sigue en tránsito para presionar a los sectores involucrados a despacharlo, sin que ese número "se resetee" cada vez que se cambia el filtro de Período. Antes de tocar código se resolvieron 3 dudas por multiple choice: (1) si el listado de clientes que se despliega al hacer clic en esta tarjeta (ya existente desde el archivo con el pedido 19/08/2026) también debía sumar el Tránsito acumulado para seguir coincidiendo con el número de arriba — el usuario eligió que SÍ; (2) si el Tránsito acumulado debía respetar el filtro de Empresa/Grupo/Rubro cuando está activo (ej. sólo Tránsito de VYMAT si se filtra por VYMAT) o ignorarlo siempre — eligió que SÍ debía respetarlo, igual que el resto del tablero; (3) si correspondía actualizar el subtítulo de la tarjeta (que decía "sin Tránsito", ya no cierto) — eligió que sí, actualizarlo. Implementación: (1) en render(), justo después de calcular totalVta (que sigue EXACTAMENTE igual que antes — respeta mesFilter, excluye Tránsito — porque de esa misma variable siguen tomando datos "Objetivo mensual" (objMesVta), "Margen bruto" (vía totalVtaNeto), la tarjeta "Venta activa · con NDCs" (ventaNdc, que el usuario dejó expresamente sin tocar) y las secciones "Clientes"/"Mix" más abajo en el archivo — modificar totalVta directamente hubiera roto las 5 cosas anteriores), se agregó una variable nueva y separada: totalTransitoAcum = suma de venta de todas las filas con estado Tránsito obtenidas de rowsNoMes() (función ya existente en el archivo, que respeta empGrupoFilter/empFilter/rubFilter pero a propósito NO aplica mesFilter — ya se usaba para otro fin en el tablero). La tarjeta pasa a mostrar totalVtaSinNdcConTransito = totalVta + totalTransitoAcum. (2) el subtítulo de esa tarjeta puntual cambia de "sin Tránsito · sin NDCs" a "incl. Tránsito acumulado · sin NDCs" — la tarjeta "Venta activa · con NDCs" (la otra, con data-card="ventaNdc") NO se tocó, sigue mostrando totalVtaNeto sin Tránsito como siempre, tal cual pidió el usuario ("vamos a aplicar esos cambios a la 2nda tarjeta KPI"). (3) computeKpiClientList('ventaSinNdc') (usada por el listado desplegable al hacer clic en la tarjeta) ahora también suma, por cliente, las mismas filas de rowsNoMes() con estado Tránsito, para que la suma del detalle siempre coincida con el número grande de la tarjeta. Verificación: dado que jsdom sigue sin responder en este sandbox (mismo problema documentado en el archivo 129), se armó un test aislado en Node puro (sin DOM) que extrae y ejecuta las funciones EXACTAS rows()/rowsNoMes()/computeKpiClientList() de este archivo contra datos de muestra a mano (2 clientes, 2 empresas VMT/LST, 2 meses jul/ago, con filas Firmada/Ingresada/Transito repartidas entre meses y empresas) y confirma: que con mes=agosto y sin filtro de empresa, totalVta (sin Tránsito) da 1.400 y totalTransitoAcum (todas las fechas) da 1.000 (200 de agosto + 300 y 500 de julio, de 2 empresas distintas), sumando 2.400 en la tarjeta; que la suma del detalle por cliente (computeKpiClientList) da exactamente 2.400 también, coincidiendo con la tarjeta; que al cambiar el filtro de Período a julio, totalVta cambia (a 0, no hay Firmada/Ingresada/Reparto ese mes en la muestra) pero totalTransitoAcum se mantiene IGUAL (1.000), confirmando que el Tránsito acumulado no depende del mes filtrado; y que al filtrar por empresa VMT, el Tránsito acumulado baja a 500 (sólo el de VMT: 200+300), confirmando que sí respeta el filtro de empresa. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que el número nuevo de la tarjeta coincide con lo que Ezequiel espera ver. Sin cambios en ninguna otra tarjeta KPI, en "Objetivo mensual", "Margen bruto", "Clientes", "Mix", ni en ninguna otra sección del tablero (incluida "Estado de remito" y su detalle por cliente/comprobante, archivos 119-129, que quedan intactos). Pedido 03/09/2026. -->
+<!-- - breve descripcion de lo hecho: la tarjeta "Venta activa" de la fila superior que dice "sin NDCs" ahora suma también TODO el Tránsito acumulado hasta la fecha (de cualquier mes, no sólo el filtrado), para que el número refleje el total real pendiente de entrega — el subtítulo pasa a decir "incl. Tránsito acumulado" en vez de "sin Tránsito". El listado de clientes que se abre al hacer clic en la tarjeta también se actualizó para sumar lo mismo. La otra tarjeta "Venta activa · con NDCs" no se tocó, sigue igual que antes. -->
+
+<!-- 131 - Dashboard ventas REM 2026 - detalle diario y mensual en tarjeta Venta activa: el usuario pidió (05/09/2026, con 2 capturas de un pivot de Excel propio: una tabla colapsada por FECHA con columnas Firmada/Reparto/Tránsito/Total general, y esa misma tabla con el 01-sept desplegado mostrando el detalle por cliente) rediseñar la tabla que se despliega al hacer clic en la tarjeta "Venta activa · sin NDCs" (la misma que se modificó en el archivo 130 para incluir Tránsito acumulado). Pidió agregar, al lado del título de esa tabla, un switch visual de 2 posiciones "vista diaria"/"vista mensual" (parecido a los filtros de Período/Empresa/Rubro pero más chico): en "vista diaria" (por defecto) se ve una fila por día con columnas por estado + total, plegable por día para ver el detalle de clientes de ese día (como en sus capturas); en "vista mensual" la tabla pasa a listar TODOS los clientes ordenados de mayor a menor por su venta total, manteniendo las mismas columnas de estado. Antes de tocar código se resolvieron 3 dudas por multiple choice: (1) si el pivot de referencia sólo mostraba 3 columnas de estado (Firmada/Reparto/Tránsito, sin Ingresada) — se eligió agregar Ingresada como 4ta columna aparte, en vez de fusionarla con Firmada, para que las columnas coincidan exactamente con los 4 estados que ya componen el número de la tarjeta (Firmada+Ingresada+Reparto del mes + Tránsito acumulado); (2) en la VISTA DIARIA, si la columna Tránsito de cada día debía ser el Tránsito con fecha en ESE día puntual (igual criterio que Firmada/Reparto) aunque el "Total general" de la tabla no cerrara exacto con el número grande de la tarjeta cuando hay Tránsito de meses anteriores — se eligió en cambio agregar una fila extra "Tránsito de otros meses" (no es un día real, no es clickeable) que acumula ese resto, para que el Total general SIEMPRE coincida con la tarjeta; (3) en la VISTA MENSUAL, si la columna Tránsito de cada cliente debía ser su Tránsito TOTAL acumulado de todas las fechas (mismo criterio que ya usa el número grande de la tarjeta desde el archivo 130) o sólo el de ese mes — se eligió el acumulado total, por coherencia. Implementación: (1) se agregó un array nuevo, KPIVTA_ROWS (poblado en processRawRows(), dentro del mismo bloque donde ya se arma ESTREM_ROWS/DAYAGG, pero SIN excluir Tránsito y SIN fundir Firmada+Ingresada en un bucket — guarda {mes,day,emp,rub,estado,cliente,vta} por cada fila Firmada/Ingresada/Reparto/Tránsito, sin agrupar por los 3 bloques fijos de empresa que usa "Estado de remito"). (2) kpiVentaRowsFiltradas() filtra ese array por empGrupoFilter/empFilter/rubFilter (igual que rows()/rowsNoMes()), IGNORANDO mesFilter a propósito — cada vista decide qué hacer con el mes por su cuenta. (3) computeVentaSinNdcDiario(): agrupa por día (dentro del mesFilter, o todo el año si no hay mes elegido) sumando Firmada/Ingresada/Reparto/Tránsito por día y por cliente dentro de ese día; el Tránsito con fecha FUERA del mesFilter se acumula aparte en "transitoOtrosMeses" (la fila especial pedida). (4) computeVentaSinNdcMensual(): reutiliza rows()/rowsNoMes() (los mismos que ya usa totalVta/totalTransitoAcum del archivo 130) para armar, por cliente, Firmada/Ingresada/Reparto del mes + Tránsito acumulado de todas las fechas, ordenado de mayor a menor por el total. (5) 2 nuevas funciones de render (renderVentaSinNdcDiariaBody/renderVentaSinNdcMensualBody) arman las tablas con 7 columnas (FECHA+CLIENTE fusionadas por día, luego FIRMADA/INGRESADA/REPARTO/TRANSITO/TOTAL) o 6 columnas (CLIENTE+4 estados+TOTAL) respectivamente, con fila "Total general" al pie. (6) renderVentaSinNdcDetalle(wrap) arma el switch (2 botones, el activo resaltado con var(--acc)) y delega a una u otra según kpiVentaVista (persiste aunque se cierre/reabra la tarjeta); un clic en una fila de día alterna kpiDiaVtaActivo (un solo día expandido a la vez, igual patrón que el resto del tablero). (7) renderKpiDetalle() ahora deriva a renderVentaSinNdcDetalle() específicamente para data-card="ventaSinNdc" — las otras 3 tarjetas clickeables (ventaNdc, cliUnicos, cliNuevos) siguen exactamente igual que antes, sin ningún cambio. Verificación: dado que jsdom sigue sin responder en este sandbox, se armó un test aislado en Node puro que extrae y ejecuta las funciones EXACTAS de este archivo (rows/rowsNoMes/kpiVentaRowsFiltradas/computeVentaSinNdcDiario/computeVentaSinNdcMensual/renderVentaSinNdcDiariaBody/renderVentaSinNdcMensualBody) contra datos de muestra (Cliente A en VMT con Firmada+Tránsito repartido entre agosto y julio, Cliente B en LST con Ingresada+Tránsito de julio) y confirma: que el total de la vista diaria (incluida la fila "Tránsito de otros meses") y el total de la vista mensual coinciden EXACTAMENTE entre sí y con el número grande de la tarjeta (2.400 sin filtro, 1.500 filtrando por empresa VMT); que la fila "Tránsito de otros meses" acumula correctamente el Tránsito de julio (800) cuando el mes filtrado es agosto; que al expandir un día se ven sus clientes con el desglose correcto por estado; y que al filtrar por empresa VMT tanto la vista diaria como la mensual bajan a los mismos números que el headline. También se verificó estructuralmente (sin DOM real, contando "<td"/"<th" y anchos de <colgroup>) que la vista diaria tiene exactamente 7 columnas (fila de día con colspan="2" + 5 <td> = 6 físicos; fila de cliente con 7 <td> físicos, sin colspan) y la vista mensual exactamente 6 columnas (6 <td> por fila), sin el tipo de desalineación que hubo en los archivos 128/129. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que el switch se ve bien y que los números de ambas vistas coinciden con lo esperado. Sin cambios en las tarjetas "Venta activa · con NDCs", "Clientes únicos", "Clientes nuevos", ni en ninguna otra sección del tablero. Pedido 05/09/2026. -->
+<!-- - breve descripcion de lo hecho: la tabla que se despliega al hacer clic en "Venta activa · sin NDCs" ahora tiene un switch "Vista diaria" / "Vista mensual" al lado del título. En vista diaria (por defecto) se ve un resumen por día con columnas Firmada/Ingresada/Reparto/Tránsito/Total, plegable para ver el detalle de clientes de ese día — el Tránsito de meses anteriores al filtrado se suma aparte en una fila "Tránsito de otros meses" para que el total siempre cierre. En vista mensual se ve el listado completo de clientes ordenado de mayor a menor por venta total, con las mismas columnas de estado. Las otras tarjetas (Venta activa con NDCs, Clientes únicos/nuevos) no cambiaron. -->
+
+<!-- 132 - Dashboard ventas REM 2026 - ajustes switch estilo sin scroll y detalle transito: el usuario pidió (05/09/2026, con una captura anotada marcando con flechas rojas el switch "Vista diaria"/"Vista mensual" agregado en el archivo 131) 4 ajustes sobre esa misma tabla desplegable de "Venta activa · sin NDCs": (1) el switch usaba una paleta propia (fondo var(--acc) lima siempre, texto oscuro fijo) que no combinaba con el estilo de los filtros de Período/Empresa/Rubro de arriba (navy/blanco en modo claro) — pidió que use EXACTAMENTE la misma paleta que esos filtros; (2) tanto la vista diaria como la mensual tenían un contenedor con max-height:400px+overflow-y:auto que obligaba a scrollear para ver toda la información del mes — pidió que la tabla se muestre siempre completa desde el primer clic en la tarjeta, creciendo a medida que se van desplegando días/clientes; (3) la fila "Tránsito de otros meses" (agregada en el archivo 131, no clickeable) pidió que también sea plegable/desplegable como un día real, mostrando al abrirla el listado de clientes con su total (no el detalle completo de productos, que no existe a este nivel); (4) en vista mensual, pidió una referencia visual para saber si el importe de la columna TRANSITO de un cliente incluye Tránsito acumulado de meses anteriores (no sólo del mes activo), y que al hacer clic en esa fila se despliegue en 2 líneas "Mes actual"/"Acumulado meses anteriores". Antes de tocar código se resolvieron 2 dudas por multiple choice: para el punto (4), qué forma debía tener la referencia visual — se eligió un punto de color (ámbar) junto al importe de TRANSITO en vez de, por ejemplo, un ícono o resaltado de toda la celda; y qué zona de la fila debía ser clickeable para desplegar el detalle — se eligió TODA la fila del cliente (no sólo la celda de TRANSITO), para que sea más fácil de encontrar/tocar. Implementación: (1) el switch de renderVentaSinNdcDetalle() pasó de estilos inline (background/color hardcodeados) a usar las clases CSS ya existentes ".seg"/".seg button"/".seg button.on" (las mismas que usan los filtros de arriba desde antes de este archivo) — sólo se sobrescribe por encima el padding/font-size para que se vea más chico que los filtros principales, dejando que el resto de la cascada (colores light/dark, hover, box-shadow del estado activo) la maneje el CSS global sin duplicar código de color. (2) se quitaron los `<div style="max-height:400px;overflow-y:auto">` que envolvían las tablas de renderVentaSinNdcDiariaBody() y renderVentaSinNdcMensualBody() — mismo criterio ya usado en "Estado de remito" desde el archivo 125 (la tabla crece con el contenido en vez de scrollear). (3) se extrajo una función auxiliar nueva _filaDiaHtml(key,label,tot,clientesMap,{especial}) que arma una fila de "día" genérica (mismas 7 columnas, mismo mecanismo de expandir/colapsar vía data-daykey) — tanto los días reales como la nueva fila especial la usan, evitando duplicar el marcado HTML entre ambos casos (con esto también se evita repetir el tipo de descuadre de columnas que hubo en los archivos 128/129). computeVentaSinNdcDiario() ahora también devuelve clientesOtrosMeses (mapa cliente→monto de Tránsito con fecha fuera del mesFilter), y la fila "Tránsito de otros meses" se renderiza con data-daykey="__OTROS_MESES__" (una pseudo-clave reservada que nunca puede colisionar con una clave real "mes|day"), quedando plegable exactamente igual que un día común — al desplegarla se ven sólo los clientes con su Tránsito y su total (Firmada/Ingresada/Reparto de esa fila especial quedan en "—", no aplican). (4) computeVentaSinNdcMensual() ahora calcula, por cliente, transitoMesActual (Tránsito con fecha dentro de mesFilter) y transitoAnterior (fuera de mesFilter) además del total ya existente — la suma de ambos sigue siendo exactamente igual al Tránsito total de siempre, no cambia ningún número, sólo se lo desagrega. renderVentaSinNdcMensualBody() muestra un punto ámbar (#f59e0b) junto al importe de TRANSITO sólo cuando transitoAnterior>0 (si el 100% del Tránsito de ese cliente es del mes activo, no se muestra nada especial); toda la fila de ese cliente pasa a ser clickeable (cursor:pointer, atributo data-cli-transito con el nombre del cliente; los clientes sin Tránsito de meses anteriores llevan data-cli-transito="" y no son clickeables) y al hacer clic se despliega debajo una fila con exactamente 2 líneas: "Mes actual: $X" y "Acumulado meses anteriores: $Y" (nuevo estado global kpiClienteTransitoActivo, un cliente expandido a la vez, mismo patrón "uno solo a la vez" que el resto del tablero). Verificación: dado que jsdom sigue sin responder en este sandbox (mismo problema documentado desde el archivo 129), se armó un test aislado en Node puro que extrae y ejecuta las funciones EXACTAS de este archivo (kpiVentaRowsFiltradas/computeVentaSinNdcDiario/computeVentaSinNdcMensual/_filaDiaHtml/renderVentaSinNdcDiariaBody/renderVentaSinNdcMensualBody/rows/rowsNoMes) contra datos de muestra con 3 clientes (Cliente A con Firmada+Ingresada+Reparto+Tránsito repartido entre septiembre y agosto, Cliente B con Tránsito 100% de agosto, Cliente C sin Tránsito) y confirma: que el Tránsito total sumado en la vista mensual (1.400) coincide exactamente con el Tránsito total de KPIVTA_ROWS; que Cliente A separa correctamente 300 de mes actual y 700 de acumulado anterior (total 1.000, sin alterarlo); que Cliente B (100% Tránsito de meses anteriores) da 0 de mes actual y 400 de acumulado, confirmando el caso límite; que Cliente C no dispara la referencia visual (transitoAnterior=0); que la fila "Tránsito de otros meses" acumula exactamente 1.100 (700 de A + 400 de B) con el desglose correcto por cliente; que el total general de la vista diaria (incluida esa fila especial) coincide exactamente con el total general de la vista mensual y con el número que mostraría la tarjeta (totalVta+totalTransitoAcum, 3.250 en los 3 casos); y que al expandir la fila "Tránsito de otros meses" aparecen los clientes correctos, y al expandir el detalle mensual de Cliente A aparecen las 2 líneas "Mes actual"/"Acumulado meses anteriores". También se verificó estructuralmente (sin DOM real, contando "<td"/"<th" y anchos de <colgroup>) que ninguna de las 2 tablas usa max-height/overflow-y, que el <colgroup> de la vista diaria sigue en 7 columnas y el de la mensual en 6, y que cada fila (de día, de la fila especial, y de cliente en vista mensual) tiene la cantidad exacta de <td> que le corresponde a su colgroup (contemplando los colspan="2"), sin ningún descuadre. También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que el switch ahora combina con los filtros de arriba (en modo claro y oscuro), que ya no hace falta scrollear, que la fila "Tránsito de otros meses" se pliega/despliega bien, y que el puntito ámbar + el detalle de 2 líneas en vista mensual se entienden a simple vista. Sin cambios en las tarjetas "Venta activa · con NDCs", "Clientes únicos", "Clientes nuevos", en la sección "Estado de remito", ni en ninguna otra parte del tablero. Pedido 05/09/2026. -->
+<!-- - breve descripcion de lo hecho: se ajustó el switch "Vista diaria"/"Vista mensual" de la tarjeta "Venta activa · sin NDCs" para que use la misma paleta de colores que los filtros de Período/Empresa/Rubro de arriba (antes no combinaba, sobre todo en modo claro). Se quitó el scroll interno de ambas vistas: ahora la tabla se ve completa desde que abrís la tarjeta, sin necesidad de scrollear. La fila "Tránsito de otros meses" ahora también se puede desplegar (como un día más) y muestra el listado de clientes con su total. En vista mensual, los clientes cuyo Tránsito incluye algo de meses anteriores (no sólo del mes activo) ahora tienen un punto ámbar junto al importe — al hacer clic en esa fila se despliega el detalle en 2 líneas: "Mes actual" y "Acumulado meses anteriores". -->
+
+<!-- 133 - Dashboard ventas REM 2026 - boton de captura en tarjeta Venta activa: el usuario pidió (05/09/2026) agregar a la tabla desplegable de "Venta activa · sin NDCs" (la misma trabajada en los archivos 130/131/132) un botón de captura de pantalla sobre el margen derecho, para poder pegar la imagen en un grupo de WhatsApp — igual idea que ya existe desde los archivos 127/127b para cada tabla de "Estado de remito" — aclarando explícitamente que si hay algo desplegado en ese momento (un día, la fila "Tránsito de otros meses", o el detalle mensual de un cliente con Tránsito de meses anteriores) tiene que quedar incluido en la captura. Antes de tocar código no hizo falta preguntar nada: al ya existir el mecanismo de captura de "Estado de remito" (html2canvas + copiado al portapapeles con fallback de descarga), y al ya haberse quitado el scroll interno de esta tabla en el archivo 132 (todo el contenido, incluido lo desplegado, vive siempre en el flujo normal del documento, no en un contenedor con overflow oculto), capturar el bloque completo de la tarjeta con html2canvas alcanza por sí solo para cumplir el pedido, sin necesidad de lógica adicional para "detectar qué hay abierto". Implementación: (1) en renderVentaSinNdcDetalle(), el <div class="card"> que contiene el título+switch+tabla ahora tiene id="ventaSinNdcCardBlock" (para poder ubicarlo con document.getElementById al capturar) y un botón nuevo con data-capture-venta="1" (mismo ícono de cámara SVG y mismo estilo visual que los botones de "Estado de remito": position:absolute;top:12px;right:14px, no ocupa espacio en el flujo), y el <div class="c-head"> ganó padding-right:90px para que el subtítulo (período) no quede tapado por el botón. (2) función nueva captureVentaSinNdcImage(): copia exacta de la mecánica ya probada en captureEstadoTablaImage() (archivo 127) — usa html2canvas sobre el bloque completo #ventaSinNdcCardBlock, con ignoreElements excluyendo específicamente el botón (data-capture-venta) para que la imagen no se saque a sí misma, fondo dinámico según el tema activo (--panel), escala 2x, ancho/alto igual al scrollWidth/scrollHeight del bloque (para capturar todo el contenido aunque sea más alto que la pantalla visible), copiado al portapapeles vía Clipboard API con fallback de descarga del PNG si el navegador no lo soporta. El nombre del archivo de fallback incluye qué vista estaba activa al momento de capturar (ej. "Venta activa sin NDCs - diaria - 20260905.png" o "... - mensual - ..."). (3) el botón se conecta después de cada wrap.innerHTML (igual patrón que el resto de los listeners de esta función: se reasignan en cada render porque el HTML se reconstruye entero cada vez que se abre/cierra un día, se cambia de vista, o se expande el detalle de un cliente). Verificación: dado que jsdom sigue sin responder en este sandbox, se corrió el chequeo de sintaxis completo del archivo con Node (new Function sobre el <script> completo, sin errores) y se verificó estructuralmente sobre el HTML generado que: el id="ventaSinNdcCardBlock" aparece una sola vez, el atributo data-capture-venta="1" aparece una sola vez (un solo botón, no duplicado en cada re-render), la función captureVentaSinNdcImage está definida una sola vez y efectivamente conectada al clic del botón, y que el ignoreElements de html2canvas apunta específicamente a data-capture-venta (no al atributo de "Estado de remito", que es distinto, para no interferir entre ambos mecanismos). Por construcción (el bloque capturado es el mismo <div> completo que ya contiene, sin scroll oculto desde el archivo 132, cualquier fila desplegada), no hizo falta un test adicional de "contenido expandido incluido en la captura": no hay ninguna condición en el código que excluya esas filas de lo que html2canvas fotografía. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario pruebe el botón con un día o un cliente desplegado y confirme que la imagen resultante efectivamente lo incluye, y que el botón no tapa el título ni el período en pantallas angostas. Sin cambios en las tablas de "Estado de remito" (que mantienen su propio botón de captura, independiente de este), en las otras tarjetas KPI (Venta activa con NDCs, Clientes únicos/nuevos), ni en ninguna otra parte del tablero. Pedido 05/09/2026. -->
+<!-- - breve descripcion de lo hecho: la tabla que se despliega al hacer clic en "Venta activa · sin NDCs" ahora tiene un botón de captura (📷) en el margen derecho, igual que las tablas de "Estado de remito" — genera una imagen y la copia al portapapeles para pegar directo en WhatsApp. Si en ese momento tenías un día, la fila "Tránsito de otros meses", o el detalle de un cliente desplegado, queda incluido en la captura tal como pediste. -->
+
+<!-- 134 - Dashboard ventas REM 2026 - alineacion boton captura Venta activa: el usuario reportó (05/09/2026, con una captura anotada con un recuadro verde alrededor del título+switch+período y uno rojo alrededor del botón "Capturar") que el botón de captura agregado en el archivo 133 quedaba "casi casi" bien pero no perfectamente alineado con el resto de esa fila (título "Venta activa · sin NDCs", switch "Vista diaria/mensual" y el período a la derecha), pidiendo que quede perfectamente alineado tanto en vista diaria como en vista mensual. Diagnóstico (sin necesidad de preguntarle nada al usuario, la causa era clara revisando el código del archivo 133): el botón se había agregado con position:absolute y un offset fijo a mano (top:12px;right:14px), pensado para una fila de título simple de una sola línea de texto (el mismo criterio que ya usan los botones de "Estado de remito", donde el título no lleva nada más al lado) — pero acá el título comparte la fila con el switch "Vista diaria/mensual" (una fila más alta, con pastillas de ~28px), así que un offset fijo en píxeles no podía quedar perfectamente centrado con el resto: quedaba corrido hacia arriba respecto al centro real de esa fila más alta. Implementación: se reemplazó el posicionamiento absoluto por un layout de flexbox normal, evitando cualquier número mágico. (1) el <div class="c-head"> pasó a tener align-items:center (en vez del align-items:baseline que hereda por default de la clase .c-head, pensado para texto simple, no ideal cuando hay pastillas de switch de por medio). (2) el botón de captura dejó de estar suelto con position:absolute dentro del <div class="card"> y pasó a vivir DENTRO de c-head, agrupado junto al período (span.c-note) dentro de un <span style="display:flex;align-items:center;gap:12px"> — de esta forma el período y el botón quedan siempre centrados verticalmente entre sí, y ese grupo completo queda alineado al centro contra el título+switch de la izquierda (gracias al align-items:center del c-head), sin importar cuánto mida realmente esa fila. (3) como consecuencia, ya no hace falta el position:relative explícito en el div.card (la clase .card ya lo tiene por defecto desde antes, para otros usos) ni el padding-right:90px que se le había agregado a c-head en el archivo 133 para que el período no quedara tapado por el botón absoluto — ambos se quitaron, ya que con el botón dentro del flujo normal no hay superposición que evitar. La estructura de datos, el mecanismo de captura (captureVentaSinNdcImage, ignoreElements, fondo dinámico, copiado al portapapeles con fallback de descarga) y el id="ventaSinNdcCardBlock"/atributo data-capture-venta="1" quedaron exactamente iguales que en el archivo 133 — este cambio es puramente de posicionamiento CSS, no toca ninguna lógica. Al no depender de un alto de fila fijo, el arreglo es válido para ambas vistas (diaria y mensual) por igual, ya que la fila del título nunca cambia de estructura entre una y otra (sólo cambia la tabla de abajo). Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó estructuralmente sobre el HTML generado que en el código real (fuera de los comentarios de changelog) ya no queda ningún "position:absolute" asociado al botón data-capture-venta, que el id="ventaSinNdcCardBlock" y el atributo data-capture-venta="1" siguen apareciendo una sola vez cada uno, y que captureVentaSinNdcImage sigue definida y conectada al clic exactamente igual que antes. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme con una captura nueva que ahora el botón se ve perfectamente alineado en altura con el título/switch/período, en ambas vistas. Sin cambios en las tablas de "Estado de remito", en las otras tarjetas KPI, ni en ninguna otra parte del tablero. Pedido 05/09/2026. -->
+<!-- - breve descripcion de lo hecho: se corrigió la alineación del botón de captura de la tarjeta "Venta activa · sin NDCs" — antes tenía una posición fija que lo despegaba un poco de la fila del título/switch/período; ahora está agrupado junto al período dentro de la misma fila con alineación centrada, así que siempre queda perfectamente a la misma altura que el resto, tanto en vista diaria como en vista mensual. -->
+
+<!-- 135 - Dashboard ventas REM 2026 - rename vista mensual a vista clientes: el usuario pidió (05/09/2026), tras confirmar que el botón de captura quedó perfectamente alineado, que el botón del switch que dice "Vista mensual" pase a llamarse "Vista clientes". Implementación: cambio puramente de etiqueta visible, dentro de renderVentaSinNdcDetalle() — en la línea que arma switchHtml, el segundo switchBtn('mensual','Vista mensual') pasa a switchBtn('mensual','Vista clientes'); el primer argumento ('mensual') es el VALOR interno que se guarda en kpiVentaVista y no cambió (sigue siendo 'mensual' en todo el código: computeVentaSinNdcMensual(), renderVentaSinNdcMensualBody(), y la condición kpiVentaVista==='mensual' en renderVentaSinNdcDetalle() para elegir qué cuerpo de tabla renderizar), así que no hizo falta tocar ninguna otra función ni lógica — sólo cambia lo que el usuario lee en el botón. Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó que el texto "Vista clientes" aparece en el botón correspondiente y que el valor interno 'mensual' se mantiene intacto en el resto del código (fuera de los comentarios de changelog de archivos anteriores, que documentan el nombre viejo y quedan sin tocar por ser historial). No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre). Sin cambios en el botón de captura (archivo 134), en las tablas de "Estado de remito", ni en ninguna otra parte del tablero. Pedido 05/09/2026. -->
+<!-- - breve descripcion de lo hecho: el botón del switch que decía "Vista mensual" ahora dice "Vista clientes" — sólo cambió el nombre visible, la funcionalidad (listado de clientes ordenado de mayor a menor con sus columnas de estado) sigue exactamente igual. -->

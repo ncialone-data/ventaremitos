@@ -312,15 +312,15 @@ svg{display:block;width:100%;overflow:visible}
 
 <div class="cutbar">
   <span class="cut-lbl">Período</span>
-  <div class="seg" id="mesSeg">
-    <button data-m="" class="on">Todo el año</button>
-    <button data-m="2026-01">Ene</button>
-    <button data-m="2026-02">Feb</button>
-    <button data-m="2026-03">Mar</button>
-    <button data-m="2026-04">Abr</button>
-    <button data-m="2026-05">May</button>
-    <button data-m="2026-06">Jun · parcial</button>
-  </div>
+  <!-- pedido 06/09/2026: antes estos 7 botones (Todo el año/Ene.../Jun·parcial) venían escritos
+       a mano en el HTML estático, así que se veían "precargados" apenas abría el tablero, ANTES
+       de que llegaran los datos reales — y encima con un rango fijo (ene-jun) que podía no
+       coincidir con la realidad. seg.innerHTML se reconstruye por completo con los meses reales
+       apenas terminan de cargarse los datos (ver processRawRows(), más abajo en este mismo
+       archivo), así que ahora arranca vacío, igual criterio que #empGrupoSeg/#rubSeg de acá
+       abajo (que ya arrancaban vacíos desde antes) — mientras carga, no se ve ningún botón de
+       período, sólo el mensaje "↻ Cargando…" del botón "Actualizar datos". -->
+  <div class="seg" id="mesSeg"></div>
   <button class="xlsx-btn" id="sheetsBtn">↻ Actualizar datos</button>
   <span id="fileStatus" class="file-status"></span>
   <div style="flex-basis:100%;height:0"></div>
@@ -669,6 +669,15 @@ let kpiActiveCard=null;   // 'ventaNdc' | 'ventaSinNdc' | 'cliUnicos' | 'cliNuev
 let kpiVentaVista='diaria'; // 'diaria' | 'mensual' — se mantiene aunque se cierre/reabra la tarjeta
 let kpiDiaVtaActivo=null;   // dayKey ("mes|day") del día desplegado en la vista diaria (uno solo a la vez)
 let kpiClienteTransitoActivo=null; // cliente con el detalle "mes actual/acumulado anterior" desplegado en vista mensual (uno solo a la vez)
+// NUEVO — pedido 06/09/2026: la 1ra tarjeta KPI ("Venta activa · con NDCs", data-card="ventaNdc")
+// gana la MISMA tabla desplegable (switch vista diaria/vista clientes + botón de captura) que
+// ya tiene la 2da tarjeta ("Venta activa · sin NDCs") desde los archivos 131-134, pero
+// respetando la propia definición de ESTA tarjeta: sin Tránsito (se excluye por completo, ni
+// siquiera se muestra la columna) y con el neto de Notas de Crédito/Débito (columna NDC en vez
+// de TRANSITO). Estado independiente del de la otra tarjeta (persisten por separado aunque se
+// cierre/reabra cualquiera de las 2).
+let kpiVentaNdcVista='diaria'; // 'diaria' | 'mensual' (mensual = "Vista clientes", mismo criterio que la otra tarjeta)
+let kpiDiaNdcActivo=null;      // dayKey ("mes|day") del día desplegado en la vista diaria (uno solo a la vez)
 const getPrevMonth=m=>{const[y,mo]=m.split('-').map(Number);const pm=mo===1?12:mo-1;const py=mo===1?y-1:y;return `${py}-${pm.toString().padStart(2,'0')}`;};
 function rows(){let r=DATA;if(mesFilter)r=r.filter(d=>d.m===mesFilter);if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
 function rowsNoMes(){let r=DATA;if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.p));}if(empFilter)r=r.filter(d=>d.p===empFilter);if(rubFilter)r=r.filter(d=>d.r===rubFilter);return r;}
@@ -2828,11 +2837,289 @@ async function captureVentaSinNdcImage(){
   }
 }
 
+// ── "Venta activa · con NDCs" — vista diaria/vista clientes (pedido 06/09/2026) ───────────
+// Misma tabla que ya tiene "Venta activa · sin NDCs" (switch + botón de captura), pero
+// respetando la definición propia de ESTA tarjeta (totalVtaNeto = totalVta + ndcAdjVenta,
+// ver render()): SIN Tránsito (columna eliminada, ni un solo registro de Tránsito entra acá)
+// y CON el neto de Notas de Crédito/Débito (columna NDC en su lugar). A diferencia del
+// Tránsito de la otra tarjeta (que se acumula de CUALQUIER fecha, ignorando mesFilter), el
+// NDC de esta tarjeta respeta mesFilter exactamente igual que Firmada/Ingresada/Reparto (ver
+// ndcAdjVenta/ndcNetForMonth: mesesScope=mesFilter?[mesFilter]:MESES) — por eso no hace falta
+// ninguna fila especial de "NDC de otros meses": ese concepto no existe para esta tarjeta.
+const _mkEstadoRowNdc=()=>({firmada:0,ingresada:0,reparto:0,ndc:0});
+const _totEstadoRowNdc=r=>r.firmada+r.ingresada+r.reparto+r.ndc;
+
+// Fila de "día" para esta tarjeta — mismo mecanismo de expandir/colapsar que _filaDiaHtml de
+// la otra tarjeta (vía data-daykey-ndc en vez de data-daykey, para no pisarse si algún día
+// conviviera con la otra tabla), pero con columna NDC en vez de TRANSITO y sin el flag
+// "especial" (acá no hay ninguna fila que no sea un día real).
+function _filaDiaHtmlNdc(key,label,tot,clientesMap){
+  const open=kpiDiaNdcActivo===key;
+  const cel=(v)=>`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px">${v?fmtFull(v):'—'}</td>`;
+  const celCli=(v)=>`<td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px">${v?fmtFull(v):'—'}</td>`;
+  const clientesList=Object.entries(clientesMap)
+    .map(([cliente,r])=>({cliente,...r,total:_totEstadoRowNdc(r)}))
+    .sort((a,b)=>b.total-a.total);
+  const clienteRows=open?clientesList.map(c=>`<tr style="border-bottom:1px solid var(--line)">
+    <td></td>
+    <td style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+    ${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${celCli(c.ndc)}
+    <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600">${fmtFull(c.total)}</td>
+  </tr>`).join(''):'';
+  return `<tr data-daykey-ndc="${key}" style="cursor:pointer;border-bottom:1px solid var(--line);${open?'background:rgba(96,165,250,.08)':''}">
+    <td colspan="2" style="padding:6px 8px;font-size:12px;font-weight:600">${open?'▾':'▸'} ${label}</td>
+    ${cel(tot.firmada)}${cel(tot.ingresada)}${cel(tot.reparto)}${cel(tot.ndc)}
+    <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700">${fmtFull(_totEstadoRowNdc(tot))}</td>
+  </tr>${clienteRows}`;
+}
+
+function computeVentaNdcDiario(){
+  // Firmada/Ingresada/Reparto: por día, dentro del mesFilter (o todo el año si no hay mes
+  // elegido) — se excluye Tránsito por completo desde el primer filtro (esta tarjeta es "sin
+  // Tránsito", a diferencia de la otra). El NDC se ubica por día usando la fecha de EMISIÓN de
+  // cada nota (n.fecha — NCR/NDB traen su propia fecha, no la del remito original), pero el
+  // criterio de "a qué mes pertenece" para decidir si entra en el mesFilter sigue siendo n.mes
+  // (el mes del remito, el mismo que usa NDC_MES_AGG/ndcNetForMonth) — así el total de esta
+  // tabla coincide exactamente con totalVtaNeto de la tarjeta, sea cual sea el mes de emisión.
+  const rowsAll=kpiVentaRowsFiltradas().filter(d=>d.estado!=='Transito');
+  const dias={};
+  rowsAll.forEach(d=>{
+    const dentroDelMes=!mesFilter||d.mes===mesFilter;
+    if(!dentroDelMes) return;
+    const dayKey=`${d.mes}|${d.day}`;
+    if(!dias[dayKey])dias[dayKey]={mes:d.mes,day:d.day,tot:_mkEstadoRowNdc(),clientes:{}};
+    const campo=_campoEstado(d.estado); // sólo 'firmada'/'ingresada'/'reparto' (Transito ya excluido)
+    dias[dayKey].tot[campo]+=d.vta;
+    if(!dias[dayKey].clientes[d.cliente])dias[dayKey].clientes[d.cliente]=_mkEstadoRowNdc();
+    dias[dayKey].clientes[d.cliente][campo]+=d.vta;
+  });
+  // Igual "salvedad de rubro" que ndcNetForMonth: la solapa NDC no tiene columna RUBRO, así
+  // que si hay un rubro filtrado no se puede saber qué parte de cada nota le corresponde — no
+  // se suma nada de NDC en ese caso (mismo criterio que ndcAdjVenta/computeKpiClientList).
+  if(!rubFilter){
+    const mesesScope=mesFilter?[mesFilter]:MESES;
+    [...NDC_DETAIL.ncr,...NDC_DETAIL.ndb].forEach(n=>{
+      if(!mesesScope.includes(n.mes)) return;
+      if(empGrupoFilter && !(EMP_GRUPOS[empGrupoFilter]||[]).includes(n.emp)) return;
+      if(empFilter && n.emp!==empFilter) return;
+      if(!n.fecha) return; // nota sin fecha parseable: no se puede ubicar en un día puntual
+      const day=n.fecha.getDate();
+      const dayKey=`${n.mes}|${day}`;
+      if(!dias[dayKey])dias[dayKey]={mes:n.mes,day,tot:_mkEstadoRowNdc(),clientes:{}};
+      dias[dayKey].tot.ndc+=n.importe;
+      const key=sc2(n.cliente);
+      if(!dias[dayKey].clientes[key])dias[dayKey].clientes[key]=_mkEstadoRowNdc();
+      dias[dayKey].clientes[key].ndc+=n.importe;
+    });
+  }
+  return {dias};
+}
+
+function computeVentaNdcMensual(){
+  // Mismo criterio EXACTO que computeKpiClientList('ventaNdc') (el listado plano que usaba
+  // esta tarjeta antes de este cambio), pero desglosado por estado en vez de un solo total —
+  // así el "Total general" de esta vista coincide siempre con totalVtaNeto de la tarjeta Y con
+  // el listado plano de siempre (que sigue existiendo, ninguna otra tarjeta lo usa distinto).
+  const map={};
+  rows().forEach(d=>{
+    if(!['Firmada','Ingresada','Reparto'].includes(d.e))return;
+    if(!map[d.c])map[d.c]=_mkEstadoRowNdc();
+    map[d.c][d.e==='Firmada'?'firmada':d.e==='Ingresada'?'ingresada':'reparto']+=d.v;
+  });
+  if(!rubFilter){
+    const mesesScope=mesFilter?[mesFilter]:MESES;
+    [...NDC_DETAIL.ncr,...NDC_DETAIL.ndb].forEach(n=>{
+      if(!mesesScope.includes(n.mes)) return;
+      if(empGrupoFilter && !(EMP_GRUPOS[empGrupoFilter]||[]).includes(n.emp)) return;
+      if(empFilter && n.emp!==empFilter) return;
+      const key=sc2(n.cliente);
+      if(!map[key])map[key]=_mkEstadoRowNdc();
+      map[key].ndc+=n.importe;
+    });
+  }
+  const list=Object.entries(map).map(([cliente,r])=>({cliente,...r,total:_totEstadoRowNdc(r)}));
+  list.sort((a,b)=>b.total-a.total);
+  return list;
+}
+
+function renderVentaNdcDiariaBody(){
+  const {dias}=computeVentaNdcDiario();
+  const dayKeys=Object.keys(dias).sort((a,b)=>{
+    const[ma,da]=a.split('|'),[mb,db]=b.split('|');
+    return ma===mb?(+da-+db):(ma<mb?-1:1);
+  });
+  if(!dayKeys.length){
+    return `<div style="font-size:12px;color:var(--mut)">Sin datos para este período/filtro.</div>`;
+  }
+  const fmtDay=k=>{const[mes,day]=k.split('|');return `${day.toString().padStart(2,'0')}-${(MLBL[mes]||mes)}`;};
+  const totGen=_mkEstadoRowNdc();
+  const rowsHtml=dayKeys.map(k=>{
+    const d=dias[k];
+    totGen.firmada+=d.tot.firmada; totGen.ingresada+=d.tot.ingresada;
+    totGen.reparto+=d.tot.reparto; totGen.ndc+=d.tot.ndc;
+    return _filaDiaHtmlNdc(k,fmtDay(k),d.tot,d.clientes);
+  }).join('');
+  // Sin scroll interno, mismo criterio que la otra tarjeta desde el archivo 132.
+  return `<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+      <colgroup><col style="width:12%"><col style="width:26%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:10%"></colgroup>
+      <thead><tr style="border-bottom:1px solid var(--line2)">
+        <th colspan="2" style="padding:5px 8px;text-align:left;font-weight:600">FECHA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">FIRMADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">INGRESADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">REPARTO</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">NDC</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">TOTAL</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+      <tfoot><tr style="border-top:2px solid var(--line2);font-weight:700">
+        <td colspan="2" style="padding:6px 8px">Total general</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.firmada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ingresada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.reparto)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ndc)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(_totEstadoRowNdc(totGen))}</td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function renderVentaNdcMensualBody(){
+  const list=computeVentaNdcMensual();
+  if(!list.length) return `<div style="font-size:12px;color:var(--mut)">Sin clientes para este período/filtro.</div>`;
+  const cel=(v)=>`<td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${v?fmtFull(v):'—'}</td>`;
+  const totGen=list.reduce((s,c)=>({firmada:s.firmada+c.firmada,ingresada:s.ingresada+c.ingresada,reparto:s.reparto+c.reparto,ndc:s.ndc+c.ndc}),_mkEstadoRowNdc());
+  const rowsHtml=list.map(c=>`<tr style="border-bottom:1px solid var(--line)">
+    <td style="padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+    ${cel(c.firmada)}${cel(c.ingresada)}${cel(c.reparto)}${cel(c.ndc)}
+    <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600">${fmtFull(c.total)}</td>
+  </tr>`).join('');
+  return `<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+      <colgroup><col style="width:34%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:10%"></colgroup>
+      <thead><tr style="border-bottom:1px solid var(--line2)">
+        <th style="padding:5px 8px;text-align:left;font-weight:600">CLIENTE</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">FIRMADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">INGRESADA</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">REPARTO</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">NDC</th>
+        <th style="padding:5px 8px;text-align:right;font-weight:600">TOTAL</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+      <tfoot><tr style="border-top:2px solid var(--line2);font-weight:700">
+        <td style="padding:6px 8px">Total general</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.firmada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ingresada)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.reparto)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ndc)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(_totEstadoRowNdc(totGen))}</td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function renderVentaNdcDetalle(wrap){
+  const periodoTxt=mesFilter?(MLBL[mesFilter]||mesFilter):'año completo';
+  const switchBtn=(v,lbl)=>`<button type="button" data-vista-ndc="${v}" class="${kpiVentaNdcVista===v?'on':''}" style="padding:4px 10px;font-size:10.5px">${lbl}</button>`;
+  const switchHtml=`<span class="seg" style="padding:3px;gap:2px;border-radius:8px;vertical-align:middle;margin-left:10px">${switchBtn('diaria','Vista diaria')}${switchBtn('mensual','Vista clientes')}</span>`;
+  const body=kpiVentaNdcVista==='diaria'?renderVentaNdcDiariaBody():renderVentaNdcMensualBody();
+  const captureBtnHtml=`<button type="button" data-capture-ndc="1" title="Capturar esta tabla como imagen (para pegar en WhatsApp)" style="display:inline-flex;align-items:center;gap:6px;padding:4px 9px;font-size:10.5px;font-weight:600;color:var(--tx);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;cursor:pointer;flex-shrink:0">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    <span class="captureBtnLbl">Capturar</span>
+  </button>`;
+  wrap.innerHTML=`<div class="card" id="ventaNdcCardBlock" style="margin-top:0;margin-bottom:14px">
+    <div class="c-head" style="margin-bottom:10px;align-items:center">
+      <span class="c-title">Venta activa · con NDCs${switchHtml}</span>
+      <span style="display:flex;align-items:center;gap:12px">
+        <span class="c-note">${periodoTxt}</span>
+        ${captureBtnHtml}
+      </span>
+    </div>
+    ${body}
+  </div>`;
+  wrap.querySelectorAll('button[data-vista-ndc]').forEach(btn=>{
+    btn.onclick=()=>{ kpiVentaNdcVista=btn.dataset.vistaNdc; renderKpiDetalle(); };
+  });
+  wrap.querySelectorAll('tr[data-daykey-ndc]').forEach(tr=>{
+    tr.onclick=()=>{
+      const k=tr.dataset.daykeyNdc;
+      kpiDiaNdcActivo=(kpiDiaNdcActivo===k)?null:k;
+      renderKpiDetalle();
+    };
+  });
+  const capBtn=wrap.querySelector('button[data-capture-ndc]');
+  if(capBtn) capBtn.onclick=()=>captureVentaNdcImage();
+}
+// Captura la tarjeta "Venta activa · con NDCs" — copia exacta de la mecánica de
+// captureVentaSinNdcImage() (html2canvas + portapapeles + fallback de descarga), apuntando a
+// su propio bloque/atributo (id="ventaNdcCardBlock"/data-capture-ndc) para no interferir con
+// la otra tarjeta.
+async function captureVentaNdcImage(){
+  const bloque=document.getElementById('ventaNdcCardBlock');
+  const btn=bloque?bloque.querySelector('button[data-capture-ndc]'):null;
+  const lbl=btn?btn.querySelector('.captureBtnLbl'):null;
+  if(typeof html2canvas==='undefined'){
+    alert('No se pudo cargar la librería para generar la imagen (html2canvas) desde internet. Revisá tu conexión e intentá de nuevo — el resto del tablero funciona igual sin esto.');
+    return;
+  }
+  if(!bloque){
+    alert('No se encontró la tabla de Venta activa para capturar.');
+    return;
+  }
+  if(btn)btn.disabled=true;
+  if(lbl)lbl.textContent='Generando...';
+  try{
+    const bg=getComputedStyle(document.body).getPropertyValue('--panel').trim()||'#11141c';
+    const canvas=await html2canvas(bloque,{
+      backgroundColor:bg,
+      scale:2,
+      useCORS:true,
+      width:bloque.scrollWidth,
+      height:bloque.scrollHeight,
+      windowWidth:bloque.scrollWidth,
+      windowHeight:bloque.scrollHeight,
+      ignoreElements:(el)=>el.hasAttribute&&el.hasAttribute('data-capture-ndc')
+    });
+    canvas.toBlob(async blob=>{
+      if(!blob){
+        if(lbl)lbl.textContent='Capturar';
+        if(btn)btn.disabled=false;
+        alert('No se pudo generar la imagen. Probá de nuevo.');
+        return;
+      }
+      let copiado=false;
+      try{
+        if(navigator.clipboard&&window.ClipboardItem){
+          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+          copiado=true;
+        }
+      }catch(e){ copiado=false; }
+      if(copiado){
+        if(lbl)lbl.textContent='¡Copiado! ✓';
+      } else {
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        const hoy=new Date();
+        const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
+        const vistaStr=kpiVentaNdcVista==='diaria'?'diaria':'clientes';
+        a.href=url; a.download=`Venta activa con NDCs - ${vistaStr} - ${fechaStr}.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),3000);
+        if(lbl)lbl.textContent='Descargada ⬇';
+      }
+      if(btn)btn.disabled=false;
+      setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
+    },'image/png');
+  }catch(err){
+    console.error('captureVentaNdcImage error',err);
+    if(lbl)lbl.textContent='Capturar';
+    if(btn)btn.disabled=false;
+    alert('No se pudo generar la imagen. Probá de nuevo.');
+  }
+}
+
 function renderKpiDetalle(){
   const wrap=document.getElementById('kpiDetalleWrap');
   if(!wrap) return;
   if(!kpiActiveCard){ wrap.innerHTML=''; return; }
   if(kpiActiveCard==='ventaSinNdc'){ renderVentaSinNdcDetalle(wrap); return; }
+  if(kpiActiveCard==='ventaNdc'){ renderVentaNdcDetalle(wrap); return; }
   const TITULOS={
     ventaNdc:'Venta activa · con NDCs', ventaSinNdc:'Venta activa · sin NDCs',
     cliUnicos:'Clientes únicos', cliNuevos:'Clientes nuevos'
@@ -3487,10 +3774,13 @@ document.querySelectorAll('#mesSeg button').forEach(b=>{
 document.getElementById('clearEmpBtn').onclick=()=>{empFilter=null;render();};
 document.getElementById('clearRubBtn').onclick=()=>{rubFilter=null;document.querySelectorAll('#rubSeg button').forEach(b=>b.classList.remove('on'));render();};
 
-const _firm=DATA.filter(d=>['Firmada','Ingresada','Reparto'].includes(d.e));
-const _tot=_firm.reduce((s,d)=>s+d.v,0);
-document.getElementById('periodo').textContent=
-  `${DATA.length.toLocaleString('es-AR')} registros · ene–jun 2026 · ${fmtM(_tot)} activos (Firm+Ing+Rep)`;
+// Mismo ajuste de fondo (pedido 06/09/2026): este subtítulo también tenía un rango de mes
+// escrito a mano ("ene–jun 2026"), visible durante el ratito de carga inicial junto con el
+// resto de datos en 0 — mismo problema que los botones de #mesSeg de más arriba. Se reemplaza
+// por un mensaje neutro de carga; en cuanto terminan de procesarse los datos reales,
+// processRawRows() (más arriba en este archivo) pisa este texto con el rango real calculado a
+// partir de MESES, igual que ya hacía antes de este cambio.
+document.getElementById('periodo').textContent='Cargando datos…';
 
 // Restaurar preferencia ANTES del primer render (default: claro)
 try{
@@ -3965,3 +4255,9 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 135 - Dashboard ventas REM 2026 - rename vista mensual a vista clientes: el usuario pidió (05/09/2026), tras confirmar que el botón de captura quedó perfectamente alineado, que el botón del switch que dice "Vista mensual" pase a llamarse "Vista clientes". Implementación: cambio puramente de etiqueta visible, dentro de renderVentaSinNdcDetalle() — en la línea que arma switchHtml, el segundo switchBtn('mensual','Vista mensual') pasa a switchBtn('mensual','Vista clientes'); el primer argumento ('mensual') es el VALOR interno que se guarda en kpiVentaVista y no cambió (sigue siendo 'mensual' en todo el código: computeVentaSinNdcMensual(), renderVentaSinNdcMensualBody(), y la condición kpiVentaVista==='mensual' en renderVentaSinNdcDetalle() para elegir qué cuerpo de tabla renderizar), así que no hizo falta tocar ninguna otra función ni lógica — sólo cambia lo que el usuario lee en el botón. Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó que el texto "Vista clientes" aparece en el botón correspondiente y que el valor interno 'mensual' se mantiene intacto en el resto del código (fuera de los comentarios de changelog de archivos anteriores, que documentan el nombre viejo y quedan sin tocar por ser historial). No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre). Sin cambios en el botón de captura (archivo 134), en las tablas de "Estado de remito", ni en ninguna otra parte del tablero. Pedido 05/09/2026. -->
 <!-- - breve descripcion de lo hecho: el botón del switch que decía "Vista mensual" ahora dice "Vista clientes" — sólo cambió el nombre visible, la funcionalidad (listado de clientes ordenado de mayor a menor con sus columnas de estado) sigue exactamente igual. -->
+
+<!-- 136 - Dashboard ventas REM 2026 - quitar filtro periodo precargado en carga inicial: el usuario reportó (06/09/2026, con una captura del tablero recién abierto, mostrando "0 registros" en el encabezado y un recuadro rojo alrededor de la fila de PERÍODO) que la fila de filtro de Período mostraba, ANTES de que terminaran de cargar los datos reales, un set fijo de botones "Todo el año / Ene / Feb / Mar / Abr / May / Jun · parcial" — pidiendo quitar eso: mientras el tablero está cargando, sólo debe verse el mensaje de "cargando", sin ningún dato precargado. Diagnóstico (sin necesidad de preguntarle nada al usuario, la causa quedaba clara revisando el HTML estático del archivo): esos 7 botones estaban escritos a mano directamente en el <div class="seg" id="mesSeg"> del HTML (no se generaban con datos reales), así que se veían apenas se abría la página, antes incluso de que arrancara el fetch a Google Sheets — a diferencia de los filtros de Empresa (#empGrupoSeg) y Rubro (#rubSeg), que ya arrancaban VACÍOS desde hace tiempo y recién se completan con processRawRows() una vez llegan los datos reales (por eso en la captura del usuario esos 2 filtros se ven bien, vacíos, y sólo el de Período se veía con contenido "fantasma"). Además, el rango "ene-jun 2026" era literalmente un string fijo escrito en el código (no calculado), así que ni siquiera reflejaba necesariamente el rango real de datos disponibles — coincidía con la captura del usuario, que también mostraba "0 registros · ene-jun 2026 · 0 K activos" en el subtítulo del encabezado, mismo tipo de dato precargado/engañoso, aunque el usuario no lo marcó explícitamente con el recuadro rojo. Implementación: (1) se quitaron los 7 <button> hardcodeados de #mesSeg en el HTML estático, dejando el div vacío (<div class="seg" id="mesSeg"></div>), exactamente el mismo criterio que ya usan #empGrupoSeg/#rubSeg — el div se sigue completando dinámicamente con los meses reales apenas terminan de procesarse los datos, vía el bloque ya existente `seg.innerHTML=... ms.map(...)` dentro de processRawRows() (sin tocar esa función, que ya hacía las cosas bien una vez había datos). (2) se corrigió también el subtítulo del encabezado (mismo tipo de problema, aplicando el mismo criterio general que pidió el usuario: "sin datos precargados"): el texto inicial que decía "0 registros · ene–jun 2026 · 0 K activos (Firm+Ing+Rep)" (con el rango de mes fijo a mano) pasa a decir simplemente "Cargando datos…" hasta que termine de cargar; una vez procesados los datos reales, processRawRows() sigue pisando ese texto con el rango real calculado a partir de MESES (esa parte del código ya existía y no se tocó). (3) los bindings de clic de los botones de #mesSeg (document.querySelectorAll('#mesSeg button')...) y la selección del mes vigente (if(MESES.length){mesFilter=...}) siguen funcionando igual: como se ejecutan de forma síncrona ANTES de que la fetch asíncrona resuelva, en ese momento #mesSeg está vacío y MESES todavía no tiene datos, así que esos bloques simplemente no encuentran nada que hacer (sin errores) hasta que processRawRows() reconstruye #mesSeg con los botones reales y sus propios bindings (que ya existían desde antes, en la misma función). Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó estructuralmente sobre el HTML generado que ya no queda ningún <button data-m="2026-0..."> hardcodeado en el documento, que el div#mesSeg arranca vacío, y que el texto "Cargando datos…" aparece en el lugar del subtítulo antiguo. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que, al abrir el tablero (o recargar la página), ya no ve ningún botón de mes ni el subtítulo con datos hasta que la carga real termine, y que después de cargar los filtros de Período vuelven a poblarse con los meses reales como siempre. Sin cambios en la lógica de carga de datos (processRawRows, fetch de Google Sheets), en ninguna tarjeta KPI, en "Estado de remito", ni en ninguna otra parte del tablero. Pedido 06/09/2026. -->
+<!-- - breve descripcion de lo hecho: se quitaron los botones de mes (Ene/Feb/.../Jun · parcial) que aparecían "precargados" en el filtro de Período apenas se abría el tablero, antes de que llegaran los datos reales — ahora ese filtro arranca vacío (igual que los de Empresa y Rubro) y recién se completa con los meses reales una vez termina de cargar. También se corrigió el subtítulo del encabezado, que decía "ene–jun 2026" de entrada: ahora dice simplemente "Cargando datos…" mientras carga. -->
+
+<!-- 137 - Dashboard ventas REM 2026 - tabla diaria y clientes en tarjeta Venta activa con NDCs: el usuario pidió (06/09/2026) que la 1ra tarjeta KPI ("Venta activa · $158.156.271 · todas las empresas · sin Tránsito · con NDCs", data-card="ventaNdc") tenga la MISMA tabla desplegable que ya se armó para la 2da tarjeta ("Venta activa · sin NDCs") en los archivos 131-134 (switch "vista diaria"/"vista clientes" con columnas por estado + botón de captura), pero respetando la información propia de ESTA tarjeta: sin Tránsito y con las NDCs (Notas de Crédito/Débito) netadas. Antes de tocar código no hizo falta preguntar nada al usuario: la definición de esta tarjeta ya estaba clara y documentada en render() desde los archivos 04/08/2026 y 03/09/2026 — totalVtaNeto = totalVta (Firmada+Ingresada+Reparto del mes filtrado, SIN Tránsito) + ndcAdjVenta (neto de NCR/NDB del/los mes(es) visibles, vía ndcNetForMonth/NDC_MES_AGG) — así que el diseño de la nueva tabla salió directo de esa fórmula ya existente, sin ninguna decisión ambigua que resolver. Implementación: se agregó un set de funciones paralelo al de la 2da tarjeta, pero adaptado: (1) _mkEstadoRowNdc/_totEstadoRowNdc — mismo patrón que _mkEstadoRow/_totEstadoRow pero con un campo "ndc" en vez de "transito". (2) _filaDiaHtmlNdc(key,label,tot,clientesMap) — copia de _filaDiaHtml pero sin el flag "especial" (acá no existe ninguna fila que no sea un día real, a diferencia de "Tránsito de otros meses" de la otra tarjeta) y usando data-daykey-ndc en vez de data-daykey (atributo propio, para no pisarse con la otra tabla). (3) computeVentaNdcDiario(): parte de kpiVentaRowsFiltradas() pero EXCLUYE por completo las filas de estado='Transito' desde el primer filtro (a diferencia de la otra tarjeta, acá no hay ninguna columna ni fila de Tránsito); agrupa Firmada/Ingresada/Reparto por día dentro del mesFilter (igual criterio que la otra tarjeta); el NDC se suma por día usando la fecha de EMISIÓN de cada nota (NDC_DETAIL.ncr/.ndb, campo "fecha" — no la fecha del remito original), pero el criterio de "a qué mes pertenece" para decidir si entra dentro del mesFilter sigue siendo el mismo "mes" que usa NDC_MES_AGG/ndcNetForMonth (el mes del remito), para que el total de esta tabla coincida exactamente con totalVtaNeto sea cual sea el mes real de emisión de la nota. A diferencia del Tránsito de la otra tarjeta (que se acumula de CUALQUIER fecha, ignorando mesFilter), acá el NDC respeta mesFilter igual que Firmada/Ingresada/Reparto — por eso NO hace falta ninguna fila especial de "NDC de otros meses", ese concepto no existe para esta tarjeta. Respeta la misma "salvedad de rubro" que ya tenía ndcNetForMonth: si hay un rubro filtrado, no se suma nada de NDC (la solapa NDC no tiene columna RUBRO). (4) computeVentaNdcMensual(): mismo criterio EXACTO que ya usaba computeKpiClientList('ventaNdc') (el listado plano de esta tarjeta desde el 19/08/2026, que sigue existiendo sin cambios para las otras 2 tarjetas clickeables), pero desglosado por estado en vez de un solo total. (5) renderVentaNdcDiariaBody()/renderVentaNdcMensualBody(): mismas 7/6 columnas que la otra tarjeta pero con NDC en vez de TRANSITO, sin scroll interno (mismo criterio del archivo 132). (6) renderVentaNdcDetalle(wrap): mismo switch "Vista diaria"/"Vista clientes" (reutiliza las clases .seg/.seg button.on, mismos nombres que ya se renombraron en el archivo 135) y el mismo botón de captura alineado en flexbox (mismo criterio del archivo 134), apuntando a su propio bloque (id="ventaNdcCardBlock", atributo data-capture-ndc) para no interferir con el de la otra tarjeta. (7) captureVentaNdcImage(): copia exacta del mecanismo de captureVentaSinNdcImage(html2canvas+portapapeles+fallback de descarga), con nombre de archivo de fallback "Venta activa con NDCs - diaria/clientes - AAAAMMDD.png". (8) 2 estados nuevos e independientes: kpiVentaNdcVista ('diaria'/'mensual', default diaria) y kpiDiaNdcActivo (dayKey del día desplegado) — no comparten estado con kpiVentaVista/kpiDiaVtaActivo de la otra tarjeta, cada tarjeta mantiene su propio switch/día abierto aunque se cierre y reabra. (9) renderKpiDetalle() gana una línea nueva `if(kpiActiveCard==='ventaNdc'){ renderVentaNdcDetalle(wrap); return; }`, en el mismo lugar donde ya estaba la de 'ventaSinNdc' — las otras 2 tarjetas (cliUnicos, cliNuevos) siguen exactamente igual, con el listado plano de siempre. Verificación: dado que jsdom sigue sin responder en este sandbox, se armó un test aislado en Node puro (extracción de funciones + eval en un mismo scope compartido, mismo patrón usado en los archivos 130-132) con datos de muestra (2 clientes, 2 empresas LST/VMT, Firmada/Ingresada/Reparto/Transito de septiembre, más NCR/NDB de septiembre y un NCR de agosto puesto a propósito para confirmar que queda excluido al filtrar por septiembre) y confirma: que totalVta(2000)+ndcAdjVenta(-120)=totalVtaNeto(1880) coincide EXACTAMENTE con la suma de la vista diaria (incluyendo el día donde sólo hay una nota de débito sin remitos, día 5) y con la suma de la vista mensual (clientes); que el desglose por cliente coincide con los valores esperados a mano (Cliente A: 1000/500/200/-70/1630, Cliente B: 300/0/0/-50/250); que ningún registro de Tránsito (probado con un valor exagerado de $9.999 a propósito, para que un error lo hiciera evidente) aparece en ningún lado de esta tabla, ni como columna ni sumado por error a ningún total; que la nota de agosto ($999 a propósito) queda completamente excluida al filtrar por septiembre; y que ninguna fila del cuerpo de ninguna de las 2 vistas tiene un desajuste de columnas (7 físicas en diaria contemplando colspan="2", 6 en clientes). También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que la tarjeta "Venta activa · con NDCs" ahora despliega la misma tabla con switch y botón de captura, que la columna NDC muestra números negativos para meses con más créditos que débitos, y que el botón de captura funciona igual que en la otra tarjeta. Sin cambios en "Venta activa · sin NDCs" (archivos 130-135, intactos), en "Clientes únicos"/"Clientes nuevos", en "Estado de remito", ni en ninguna otra parte del tablero. Pedido 06/09/2026. -->
+<!-- - breve descripcion de lo hecho: la tarjeta "Venta activa · con NDCs" ahora tiene la misma tabla desplegable que ya tenía "Venta activa · sin NDCs" — switch "Vista diaria"/"Vista clientes" y botón de captura — pero adaptada a esta tarjeta: sin columna de Tránsito (esta tarjeta no lo incluye) y con una columna NDC que muestra el neto de Notas de Crédito/Débito de cada día o cliente (puede ser negativo). El total de ambas vistas siempre coincide con el número grande de la tarjeta. -->

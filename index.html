@@ -211,6 +211,29 @@ svg{display:block;width:100%;overflow:visible}
 .barv{transition:y .8s cubic-bezier(.22,1,.36,1),height .8s cubic-bezier(.22,1,.36,1),opacity .3s}
 .barlbl{fill:var(--mut);font-family:"IBM Plex Mono",monospace;font-size:10.5px;text-anchor:middle}
 .tbl{width:100%;border-collapse:collapse}
+/* Modo compacto SOLO durante la captura de imagen de "Venta activa" (pedido 07/09/2026) — se
+   agrega/quita vía JS (classList.add/remove) sólo un instante, en captureVentaSinNdcImage()/
+   captureVentaNdcImage(), nunca queda aplicado en pantalla durante el uso normal. Emula el
+   autoajuste de columnas de una tabla dinámica de Excel: en vez de table-layout:fixed con
+   columnas por porcentaje (pensado para estirarse prolijo en pantalla), cada columna toma
+   sólo el ancho que necesita su contenido, con menos padding entre celdas — y la tarjeta se
+   encoge a ese contenido compacto en vez de quedar estirada al ancho completo del contenedor
+   (esto último es también lo que evita el margen en blanco a la derecha de la imagen).
+*/
+.capture-compact{display:inline-block!important}
+.capture-compact table.tbl{table-layout:auto!important;width:auto!important}
+.capture-compact table.tbl th,.capture-compact table.tbl td{padding:3px 8px!important}
+/* Fix 07/09/2026 (archivo 140): bajo table-layout:auto, una celda de nombre de cliente con
+   white-space:nowrap y SIN un ancho/max-width propio (su ancho en pantalla lo pone el
+   colgroup de la tabla, que .capture-compact ignora a propósito) le "dicta" al navegador
+   el ancho de toda la columna según el nombre de cliente más largo que haya en ese momento
+   desplegado — si ese nombre es largo, la columna (y por lo tanto la tabla entera) se estira
+   mucho más de lo necesario, dejando lo que se ve como un "espacio en blanco" enorme en el
+   resto de filas/columnas más cortas. Sólo pasa mientras hay un día (o un cliente en vista
+   clientes) desplegado en el momento de capturar. Se limita el ancho de esa celda puntual
+   SÓLO en modo captura (nunca en pantalla) para que la tabla vuelva a ajustarse de verdad al
+   contenido, con el nombre de cliente truncado con "…" si no entra. */
+.capture-compact table.tbl td.cli-nm{max-width:220px}
 .tbl th{text-align:left;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut2);
   font-weight:500;padding:0 8px 9px;border-bottom:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tbl th.r,.tbl td.r{text-align:right}
@@ -2587,7 +2610,7 @@ function _filaDiaHtml(key,label,tot,clientesMap,{especial=false}={}){
     .sort((a,b)=>b.total-a.total);
   const clienteRows=open?clientesList.map(c=>`<tr style="border-bottom:1px solid var(--line)">
     <td></td>
-    <td style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+    <td class="cli-nm" style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
     ${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${celCli(c.transito)}
     <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600">${fmtFull(c.total)}</td>
   </tr>`).join(''):'';
@@ -2675,7 +2698,7 @@ function renderVentaSinNdcMensualBody(){
       </td>
     </tr>`:'';
     return `<tr data-cli-transito="${tieneAnterior?c.cliente:''}" style="${tieneAnterior?'cursor:pointer;':''}border-bottom:1px solid var(--line)${open?';background:rgba(245,158,11,.06)':''}">
-      <td style="padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+      <td class="cli-nm" style="padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
       ${cel(c.firmada)}${cel(c.ingresada)}${cel(c.reparto)}${celTransito(c)}
       <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600">${fmtFull(c.total)}</td>
     </tr>${detalle}`;
@@ -2773,6 +2796,87 @@ function renderVentaSinNdcDetalle(wrap){
 // si el navegador no soporta Clipboard API). Como la tabla ya se renderiza completa (sin scroll
 // interno) con cualquier fila desplegada en ese momento, capturar el bloque entero alcanza para
 // que "si hay algo desplegado, esté incluído en la captura" tal como pidió el usuario.
+// AJUSTE 07/09/2026 (2 pedidos del usuario juntos, con una captura de referencia de una tabla
+// dinámica de Excel con columnas ajustadas al contenido): (1) la imagen generada venía con un
+// pedazo en blanco en el margen derecho — causa real: desde el archivo 134 el botón "Capturar"
+// pasó a vivir DENTRO del flujo normal (flexbox), a diferencia del botón de "Estado de remito"
+// (que es position:absolute y nunca ocupó espacio real) — así que bloque.scrollWidth se medía
+// CON el botón todavía ocupando su lugar en la fila, y luego html2canvas lo excluía de la
+// imagen vía ignoreElements SIN reducir el ancho ya fijado de antemano, dejando un hueco en
+// blanco del ancho exacto del botón. (2) además pidió que, SÓLO en la imagen capturada (nunca
+// en pantalla), la tabla se vea compacta como una tabla dinámica de Excel con autoajuste de
+// columnas, sin tanto espacio vacío entre columnas. Se resuelven los 2 juntos: en vez de medir
+// el ancho/alto ANTES de sacarle el botón, ahora se oculta el botón (display:none) Y se le
+// agrega la clase .capture-compact al bloque ANTES de medir — así bloque.scrollWidth/
+// scrollHeight ya reflejan el tamaño real y compacto que se va a capturar, sin sobrante. La
+// clase .capture-compact (ver <style>) cambia el layout de la tabla de table-layout:fixed +
+// columnas por porcentaje (pensado para verse bien estirado en pantalla) a table-layout:auto +
+// width:auto (cada columna toma sólo lo que necesita su contenido, igual criterio que el
+// autoajuste de una tabla dinámica) y reduce el padding de las celdas; la tarjeta pasa a
+// display:inline-block para encogerse a ese contenido en vez de quedar estirada al ancho del
+// contenedor. Todo se revierte en el finally, así la vista en pantalla nunca cambia — sólo se
+// ve compacta la fracción de segundo que dura la captura en sí.
+// Autoajuste REAL de columnas para captura (archivo 142) — reemplaza la dependencia de
+// table-layout:auto (archivos 138-141), cuyo algoritmo de resolución de anchos demostró ser
+// inconsistente entre entornos: en pruebas aisladas en esta sesión el autoajuste funcionaba
+// perfecto, pero en el entorno real del usuario (mismo archivo, mismos datos) la columna
+// FECHA/CLIENTE quedaba mucho más ancha de lo que su contenido necesitaba (417px reales vs.
+// ~157px esperados, sin ningún cliente desplegado de por medio, confirmado por consola) — sin
+// poder identificar la causa exacta pese a reproducir fielmente el HTML/CSS/fuentes reales.
+// En vez de seguir ajustando parámetros de un algoritmo de navegador que no se comporta igual
+// en todos lados, esta función mide ELLA MISMA, con un <canvas> 2D fuera de pantalla
+// (measureText), el ancho real en píxeles que necesita el texto de cada celda con su fuente/
+// tamaño/peso ya computados por el navegador — sin depender en absoluto de cómo cada
+// navegador resuelva table-layout:auto. Con esos anchos exactos por columna (tomando el
+// máximo entre todas las filas, y repartiendo entre columnas el ancho de las celdas con
+// colspan) se fija cada <col> a un ancho en píxeles explícito y la tabla pasa a
+// table-layout:fixed (que, a diferencia de auto, SIEMPRE respeta al pie de la letra los
+// anchos de <col> ya declarados, sin volver a interpretarlos según el contenido) — el
+// resultado es determinístico: la tabla queda exactamente tan ancha como la suma de sus
+// columnas ya medidas, sin ningún espacio de sobra, sea cual sea el navegador o el entorno.
+// Devuelve una función para deshacer el ajuste (usada en el finally de cada captura), así la
+// tabla en pantalla nunca queda pegada en este modo. La celda de nombre de cliente (clase
+// "cli-nm", archivo 140) sigue topeada a 220px como antes, para que un nombre excepcionalmente
+// largo no seguir estirando la columna entera (se corta con "…", ya tiene overflow/ellipsis).
+function _autofitCaptureCols(bloque){
+  const table=bloque.querySelector('table.tbl');
+  if(!table) return null;
+  const cols=[...table.querySelectorAll('colgroup col')];
+  if(!cols.length) return null;
+  const colMax=new Array(cols.length).fill(0);
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  table.querySelectorAll('thead tr, tbody tr, tfoot tr').forEach(tr=>{
+    let colIdx=0;
+    [...tr.children].forEach(cell=>{
+      const span=parseInt(cell.getAttribute('colspan')||'1',10);
+      const cs=getComputedStyle(cell);
+      ctx.font=`${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const padH=(parseFloat(cs.paddingLeft)||0)+(parseFloat(cs.paddingRight)||0);
+      let w=ctx.measureText(cell.textContent.trim()).width+padH+2;
+      if(cell.classList.contains('cli-nm')) w=Math.min(w,220);
+      if(colIdx+span<=colMax.length){
+        if(span===1){
+          colMax[colIdx]=Math.max(colMax[colIdx],w);
+        }else{
+          const per=w/span;
+          for(let i=0;i<span;i++) colMax[colIdx+i]=Math.max(colMax[colIdx+i],per);
+        }
+      }
+      colIdx+=span;
+    });
+  });
+  const prevColWidths=cols.map(c=>c.style.width);
+  const prevTableLayout=table.style.getPropertyValue('table-layout');
+  const prevTablePriority=table.style.getPropertyPriority('table-layout');
+  cols.forEach((c,i)=>{ c.style.width=Math.ceil(colMax[i])+'px'; });
+  table.style.setProperty('table-layout','fixed','important');
+  return function(){
+    cols.forEach((c,i)=>{ c.style.width=prevColWidths[i]; });
+    if(prevTableLayout){ table.style.setProperty('table-layout',prevTableLayout,prevTablePriority); }
+    else { table.style.removeProperty('table-layout'); }
+  };
+}
 async function captureVentaSinNdcImage(){
   const bloque=document.getElementById('ventaSinNdcCardBlock');
   const btn=bloque?bloque.querySelector('button[data-capture-venta]'):null;
@@ -2787,53 +2891,47 @@ async function captureVentaSinNdcImage(){
   }
   if(btn)btn.disabled=true;
   if(lbl)lbl.textContent='Generando...';
+  const prevBtnDisplay=btn?btn.style.display:'';
+  if(btn)btn.style.display='none';
+  bloque.classList.add('capture-compact');
+  const _undoAutofit=_autofitCaptureCols(bloque);
   try{
     const bg=getComputedStyle(document.body).getPropertyValue('--panel').trim()||'#11141c';
-    const canvas=await html2canvas(bloque,{
-      backgroundColor:bg,
-      scale:2,
-      useCORS:true,
-      width:bloque.scrollWidth,
-      height:bloque.scrollHeight,
-      windowWidth:bloque.scrollWidth,
-      windowHeight:bloque.scrollHeight,
-      ignoreElements:(el)=>el.hasAttribute&&el.hasAttribute('data-capture-venta')
-    });
-    canvas.toBlob(async blob=>{
-      if(!blob){
-        if(lbl)lbl.textContent='Capturar';
-        if(btn)btn.disabled=false;
-        alert('No se pudo generar la imagen. Probá de nuevo.');
-        return;
+    const w=bloque.scrollWidth, h=bloque.scrollHeight;
+    const canvas=await html2canvas(bloque,{backgroundColor:bg,scale:2,useCORS:true,width:w,height:h});
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+    if(!blob){
+      alert('No se pudo generar la imagen. Probá de nuevo.');
+      return;
+    }
+    let copiado=false;
+    try{
+      if(navigator.clipboard&&window.ClipboardItem){
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        copiado=true;
       }
-      let copiado=false;
-      try{
-        if(navigator.clipboard&&window.ClipboardItem){
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          copiado=true;
-        }
-      }catch(e){ copiado=false; }
-      if(copiado){
-        if(lbl)lbl.textContent='¡Copiado! ✓';
-      } else {
-        const url=URL.createObjectURL(blob);
-        const a=document.createElement('a');
-        const hoy=new Date();
-        const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
-        const vistaStr=kpiVentaVista==='diaria'?'diaria':'mensual';
-        a.href=url; a.download=`Venta activa sin NDCs - ${vistaStr} - ${fechaStr}.png`;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(()=>URL.revokeObjectURL(url),3000);
-        if(lbl)lbl.textContent='Descargada ⬇';
-      }
-      if(btn)btn.disabled=false;
-      setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
-    },'image/png');
+    }catch(e){ copiado=false; }
+    if(copiado){
+      if(lbl)lbl.textContent='¡Copiado! ✓';
+    } else {
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      const hoy=new Date();
+      const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
+      const vistaStr=kpiVentaVista==='diaria'?'diaria':'mensual';
+      a.href=url; a.download=`Venta activa sin NDCs - ${vistaStr} - ${fechaStr}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),3000);
+      if(lbl)lbl.textContent='Descargada ⬇';
+    }
   }catch(err){
     console.error('captureVentaSinNdcImage error',err);
-    if(lbl)lbl.textContent='Capturar';
-    if(btn)btn.disabled=false;
     alert('No se pudo generar la imagen. Probá de nuevo.');
+  } finally {
+    if(_undoAutofit) _undoAutofit();
+    bloque.classList.remove('capture-compact');
+    if(btn){ btn.style.display=prevBtnDisplay; btn.disabled=false; }
+    setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
   }
 }
 
@@ -2862,7 +2960,7 @@ function _filaDiaHtmlNdc(key,label,tot,clientesMap){
     .sort((a,b)=>b.total-a.total);
   const clienteRows=open?clientesList.map(c=>`<tr style="border-bottom:1px solid var(--line)">
     <td></td>
-    <td style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+    <td class="cli-nm" style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
     ${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${celCli(c.ndc)}
     <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600">${fmtFull(c.total)}</td>
   </tr>`).join(''):'';
@@ -2988,7 +3086,7 @@ function renderVentaNdcMensualBody(){
   const cel=(v)=>`<td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${v?fmtFull(v):'—'}</td>`;
   const totGen=list.reduce((s,c)=>({firmada:s.firmada+c.firmada,ingresada:s.ingresada+c.ingresada,reparto:s.reparto+c.reparto,ndc:s.ndc+c.ndc}),_mkEstadoRowNdc());
   const rowsHtml=list.map(c=>`<tr style="border-bottom:1px solid var(--line)">
-    <td style="padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
+    <td class="cli-nm" style="padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
     ${cel(c.firmada)}${cel(c.ingresada)}${cel(c.reparto)}${cel(c.ndc)}
     <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600">${fmtFull(c.total)}</td>
   </tr>`).join('');
@@ -3047,9 +3145,11 @@ function renderVentaNdcDetalle(wrap){
   if(capBtn) capBtn.onclick=()=>captureVentaNdcImage();
 }
 // Captura la tarjeta "Venta activa · con NDCs" — copia exacta de la mecánica de
-// captureVentaSinNdcImage() (html2canvas + portapapeles + fallback de descarga), apuntando a
-// su propio bloque/atributo (id="ventaNdcCardBlock"/data-capture-ndc) para no interferir con
-// la otra tarjeta.
+// captureVentaSinNdcImage() (html2canvas + portapapeles + fallback de descarga + modo
+// compacto sólo para la imagen, ver comentario largo arriba de esa función para el diagnóstico
+// completo del margen en blanco y el criterio de "tabla dinámica" — pedido 07/09/2026),
+// apuntando a su propio bloque/atributo (id="ventaNdcCardBlock"/data-capture-ndc) para no
+// interferir con la otra tarjeta.
 async function captureVentaNdcImage(){
   const bloque=document.getElementById('ventaNdcCardBlock');
   const btn=bloque?bloque.querySelector('button[data-capture-ndc]'):null;
@@ -3064,53 +3164,47 @@ async function captureVentaNdcImage(){
   }
   if(btn)btn.disabled=true;
   if(lbl)lbl.textContent='Generando...';
+  const prevBtnDisplay=btn?btn.style.display:'';
+  if(btn)btn.style.display='none';
+  bloque.classList.add('capture-compact');
+  const _undoAutofit=_autofitCaptureCols(bloque);
   try{
     const bg=getComputedStyle(document.body).getPropertyValue('--panel').trim()||'#11141c';
-    const canvas=await html2canvas(bloque,{
-      backgroundColor:bg,
-      scale:2,
-      useCORS:true,
-      width:bloque.scrollWidth,
-      height:bloque.scrollHeight,
-      windowWidth:bloque.scrollWidth,
-      windowHeight:bloque.scrollHeight,
-      ignoreElements:(el)=>el.hasAttribute&&el.hasAttribute('data-capture-ndc')
-    });
-    canvas.toBlob(async blob=>{
-      if(!blob){
-        if(lbl)lbl.textContent='Capturar';
-        if(btn)btn.disabled=false;
-        alert('No se pudo generar la imagen. Probá de nuevo.');
-        return;
+    const w=bloque.scrollWidth, h=bloque.scrollHeight;
+    const canvas=await html2canvas(bloque,{backgroundColor:bg,scale:2,useCORS:true,width:w,height:h});
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+    if(!blob){
+      alert('No se pudo generar la imagen. Probá de nuevo.');
+      return;
+    }
+    let copiado=false;
+    try{
+      if(navigator.clipboard&&window.ClipboardItem){
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        copiado=true;
       }
-      let copiado=false;
-      try{
-        if(navigator.clipboard&&window.ClipboardItem){
-          await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-          copiado=true;
-        }
-      }catch(e){ copiado=false; }
-      if(copiado){
-        if(lbl)lbl.textContent='¡Copiado! ✓';
-      } else {
-        const url=URL.createObjectURL(blob);
-        const a=document.createElement('a');
-        const hoy=new Date();
-        const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
-        const vistaStr=kpiVentaNdcVista==='diaria'?'diaria':'clientes';
-        a.href=url; a.download=`Venta activa con NDCs - ${vistaStr} - ${fechaStr}.png`;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(()=>URL.revokeObjectURL(url),3000);
-        if(lbl)lbl.textContent='Descargada ⬇';
-      }
-      if(btn)btn.disabled=false;
-      setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
-    },'image/png');
+    }catch(e){ copiado=false; }
+    if(copiado){
+      if(lbl)lbl.textContent='¡Copiado! ✓';
+    } else {
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      const hoy=new Date();
+      const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
+      const vistaStr=kpiVentaNdcVista==='diaria'?'diaria':'clientes';
+      a.href=url; a.download=`Venta activa con NDCs - ${vistaStr} - ${fechaStr}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),3000);
+      if(lbl)lbl.textContent='Descargada ⬇';
+    }
   }catch(err){
     console.error('captureVentaNdcImage error',err);
-    if(lbl)lbl.textContent='Capturar';
-    if(btn)btn.disabled=false;
     alert('No se pudo generar la imagen. Probá de nuevo.');
+  } finally {
+    if(_undoAutofit) _undoAutofit();
+    bloque.classList.remove('capture-compact');
+    if(btn){ btn.style.display=prevBtnDisplay; btn.disabled=false; }
+    setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
   }
 }
 
@@ -4261,3 +4355,18 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 137 - Dashboard ventas REM 2026 - tabla diaria y clientes en tarjeta Venta activa con NDCs: el usuario pidió (06/09/2026) que la 1ra tarjeta KPI ("Venta activa · $158.156.271 · todas las empresas · sin Tránsito · con NDCs", data-card="ventaNdc") tenga la MISMA tabla desplegable que ya se armó para la 2da tarjeta ("Venta activa · sin NDCs") en los archivos 131-134 (switch "vista diaria"/"vista clientes" con columnas por estado + botón de captura), pero respetando la información propia de ESTA tarjeta: sin Tránsito y con las NDCs (Notas de Crédito/Débito) netadas. Antes de tocar código no hizo falta preguntar nada al usuario: la definición de esta tarjeta ya estaba clara y documentada en render() desde los archivos 04/08/2026 y 03/09/2026 — totalVtaNeto = totalVta (Firmada+Ingresada+Reparto del mes filtrado, SIN Tránsito) + ndcAdjVenta (neto de NCR/NDB del/los mes(es) visibles, vía ndcNetForMonth/NDC_MES_AGG) — así que el diseño de la nueva tabla salió directo de esa fórmula ya existente, sin ninguna decisión ambigua que resolver. Implementación: se agregó un set de funciones paralelo al de la 2da tarjeta, pero adaptado: (1) _mkEstadoRowNdc/_totEstadoRowNdc — mismo patrón que _mkEstadoRow/_totEstadoRow pero con un campo "ndc" en vez de "transito". (2) _filaDiaHtmlNdc(key,label,tot,clientesMap) — copia de _filaDiaHtml pero sin el flag "especial" (acá no existe ninguna fila que no sea un día real, a diferencia de "Tránsito de otros meses" de la otra tarjeta) y usando data-daykey-ndc en vez de data-daykey (atributo propio, para no pisarse con la otra tabla). (3) computeVentaNdcDiario(): parte de kpiVentaRowsFiltradas() pero EXCLUYE por completo las filas de estado='Transito' desde el primer filtro (a diferencia de la otra tarjeta, acá no hay ninguna columna ni fila de Tránsito); agrupa Firmada/Ingresada/Reparto por día dentro del mesFilter (igual criterio que la otra tarjeta); el NDC se suma por día usando la fecha de EMISIÓN de cada nota (NDC_DETAIL.ncr/.ndb, campo "fecha" — no la fecha del remito original), pero el criterio de "a qué mes pertenece" para decidir si entra dentro del mesFilter sigue siendo el mismo "mes" que usa NDC_MES_AGG/ndcNetForMonth (el mes del remito), para que el total de esta tabla coincida exactamente con totalVtaNeto sea cual sea el mes real de emisión de la nota. A diferencia del Tránsito de la otra tarjeta (que se acumula de CUALQUIER fecha, ignorando mesFilter), acá el NDC respeta mesFilter igual que Firmada/Ingresada/Reparto — por eso NO hace falta ninguna fila especial de "NDC de otros meses", ese concepto no existe para esta tarjeta. Respeta la misma "salvedad de rubro" que ya tenía ndcNetForMonth: si hay un rubro filtrado, no se suma nada de NDC (la solapa NDC no tiene columna RUBRO). (4) computeVentaNdcMensual(): mismo criterio EXACTO que ya usaba computeKpiClientList('ventaNdc') (el listado plano de esta tarjeta desde el 19/08/2026, que sigue existiendo sin cambios para las otras 2 tarjetas clickeables), pero desglosado por estado en vez de un solo total. (5) renderVentaNdcDiariaBody()/renderVentaNdcMensualBody(): mismas 7/6 columnas que la otra tarjeta pero con NDC en vez de TRANSITO, sin scroll interno (mismo criterio del archivo 132). (6) renderVentaNdcDetalle(wrap): mismo switch "Vista diaria"/"Vista clientes" (reutiliza las clases .seg/.seg button.on, mismos nombres que ya se renombraron en el archivo 135) y el mismo botón de captura alineado en flexbox (mismo criterio del archivo 134), apuntando a su propio bloque (id="ventaNdcCardBlock", atributo data-capture-ndc) para no interferir con el de la otra tarjeta. (7) captureVentaNdcImage(): copia exacta del mecanismo de captureVentaSinNdcImage(html2canvas+portapapeles+fallback de descarga), con nombre de archivo de fallback "Venta activa con NDCs - diaria/clientes - AAAAMMDD.png". (8) 2 estados nuevos e independientes: kpiVentaNdcVista ('diaria'/'mensual', default diaria) y kpiDiaNdcActivo (dayKey del día desplegado) — no comparten estado con kpiVentaVista/kpiDiaVtaActivo de la otra tarjeta, cada tarjeta mantiene su propio switch/día abierto aunque se cierre y reabra. (9) renderKpiDetalle() gana una línea nueva `if(kpiActiveCard==='ventaNdc'){ renderVentaNdcDetalle(wrap); return; }`, en el mismo lugar donde ya estaba la de 'ventaSinNdc' — las otras 2 tarjetas (cliUnicos, cliNuevos) siguen exactamente igual, con el listado plano de siempre. Verificación: dado que jsdom sigue sin responder en este sandbox, se armó un test aislado en Node puro (extracción de funciones + eval en un mismo scope compartido, mismo patrón usado en los archivos 130-132) con datos de muestra (2 clientes, 2 empresas LST/VMT, Firmada/Ingresada/Reparto/Transito de septiembre, más NCR/NDB de septiembre y un NCR de agosto puesto a propósito para confirmar que queda excluido al filtrar por septiembre) y confirma: que totalVta(2000)+ndcAdjVenta(-120)=totalVtaNeto(1880) coincide EXACTAMENTE con la suma de la vista diaria (incluyendo el día donde sólo hay una nota de débito sin remitos, día 5) y con la suma de la vista mensual (clientes); que el desglose por cliente coincide con los valores esperados a mano (Cliente A: 1000/500/200/-70/1630, Cliente B: 300/0/0/-50/250); que ningún registro de Tránsito (probado con un valor exagerado de $9.999 a propósito, para que un error lo hiciera evidente) aparece en ningún lado de esta tabla, ni como columna ni sumado por error a ningún total; que la nota de agosto ($999 a propósito) queda completamente excluida al filtrar por septiembre; y que ninguna fila del cuerpo de ninguna de las 2 vistas tiene un desajuste de columnas (7 físicas en diaria contemplando colspan="2", 6 en clientes). También se corrió el chequeo de sintaxis completo del archivo con Node. No se pudo confirmar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre); conviene que el usuario confirme que la tarjeta "Venta activa · con NDCs" ahora despliega la misma tabla con switch y botón de captura, que la columna NDC muestra números negativos para meses con más créditos que débitos, y que el botón de captura funciona igual que en la otra tarjeta. Sin cambios en "Venta activa · sin NDCs" (archivos 130-135, intactos), en "Clientes únicos"/"Clientes nuevos", en "Estado de remito", ni en ninguna otra parte del tablero. Pedido 06/09/2026. -->
 <!-- - breve descripcion de lo hecho: la tarjeta "Venta activa · con NDCs" ahora tiene la misma tabla desplegable que ya tenía "Venta activa · sin NDCs" — switch "Vista diaria"/"Vista clientes" y botón de captura — pero adaptada a esta tarjeta: sin columna de Tránsito (esta tarjeta no lo incluye) y con una columna NDC que muestra el neto de Notas de Crédito/Débito de cada día o cliente (puede ser negativo). El total de ambas vistas siempre coincide con el número grande de la tarjeta. -->
+
+<!-- 138 - Dashboard ventas REM 2026 - captura compacta sin margen blanco: el usuario reportó (07/09/2026, con una captura de una tabla dinámica de Excel como referencia de estilo) 2 problemas sobre el botón de captura de las tarjetas "Venta activa" (tanto "con NDCs" del archivo 137 como "sin NDCs" de los archivos 133/134, que comparten el mismo mecanismo): (1) la imagen generada venía con un pedazo en blanco en el margen derecho; (2) pidió además que, SÓLO en la imagen capturada (nunca en la tabla que se ve en pantalla), las columnas se compriman sin tanto espacio vacío entre ellas, "similar a una tabla dinámica ajustada el tamaño al ancho de celda" (autoajuste de columnas al contenido, como hace Excel). Diagnóstico del margen en blanco (sin necesidad de preguntarle nada al usuario, la causa quedó clara comparando este botón con el de "Estado de remito", que nunca tuvo este problema): el botón "Capturar" de "Estado de remito" es position:absolute (no ocupa espacio real en el flujo del documento), pero el de "Venta activa" se había puesto DENTRO del flujo normal (flexbox) en el archivo 134, para poder alinearlo verticalmente con el título/switch/período — sin querer, esto lo convirtió en parte del ancho real de esa fila. Como bloque.scrollWidth se medía ANTES de que html2canvas excluyera el botón (vía la opción ignoreElements), el canvas quedaba fijado al ancho ORIGINAL (con el botón todavía contando), y al dibujar el contenido sin el botón, sobraba exactamente ese hueco en blanco a la derecha — su tamaño coincidía con el ancho del botón "Capturar", lo cual confirma el diagnóstico. Implementación: se resolvieron los 2 pedidos juntos, ya que la solución de uno resuelve parte del otro. (1) en captureVentaSinNdcImage()/captureVentaNdcImage(), en vez de medir bloque.scrollWidth/scrollHeight ANTES de sacar el botón y depender de ignoreElements para excluirlo recién al dibujar, ahora se OCULTA el botón (btn.style.display='none') y se le agrega una clase nueva (bloque.classList.add('capture-compact')) ANTES de medir — así el ancho/alto que se le pasa a html2canvas ya refleja el tamaño real y compacto que se va a capturar, sin sobrante; ya no hace falta la opción ignoreElements en estas 2 funciones (se dejó intacta en captureEstadoTablaImage, que nunca tuvo este problema por ser su botón position:absolute). (2) la clase nueva ".capture-compact" (agregada al <style>, cerca de ".tbl") cambia, sólo mientras está aplicada: la tabla pasa de table-layout:fixed + columnas por porcentaje (pensado para estirarse prolijo en pantalla) a table-layout:auto + width:auto (cada columna toma sólo el ancho que necesita su contenido, igual criterio de autoajuste que una tabla dinámica de Excel), se reduce el padding de celdas de ~5-6px a 3px, y la tarjeta entera pasa de su ancho normal (estirada al 100% del contenedor) a display:inline-block (se encoge a su contenido compacto) — esto último también termina de eliminar cualquier margen sobrante, ya que ahora ni el layout de la tabla ni el de la tarjeta fuerzan un ancho mayor al que realmente necesita el contenido. (3) tanto el display:none del botón como la clase .capture-compact se revierten SIEMPRE en un bloque finally (se reescribió el resto de la función con try/finally y se convirtió canvas.toBlob en una Promise para poder esperarlo correctamente dentro del mismo try, en vez del callback suelto que tenía antes) — así la vista en pantalla nunca queda pegada en modo compacto, ni siquiera si algo falla a mitad de camino (error de red, portapapeles bloqueado, etc.). El comportamiento de portapapeles/fallback de descarga no cambió. Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó estructuralmente sobre el código real (no comentarios) que: ya no queda ningún ignoreElements en captureVentaSinNdcImage/captureVentaNdcImage (sólo sigue existiendo, sin tocar, en captureEstadoTablaImage), que ambas funciones ocultan el botón y agregan la clase compacta ANTES del try, que ambas tienen un finally que revierte los 2 cambios (clase y display) y restaura el botón, y que las llaves de ambas funciones balancean correctamente. No se pudo probar visualmente en un navegador real dentro de esta sesión (misma limitación de siempre, agravada acá porque html2canvas necesita un DOM real con layout de verdad, no simulable con el harness de Node); conviene que el usuario pruebe el botón de captura en las 2 tarjetas "Venta activa" y confirme que ya no aparece el margen en blanco y que la imagen ahora se ve compacta como una tabla dinámica, sin que la tabla en pantalla (antes/después de capturar) se vea afectada en ningún momento salvo por una fracción de segundo mientras se genera la imagen. Sin cambios en "Estado de remito" (su botón de captura queda exactamente igual, no tenía este problema), en las tarjetas "Clientes únicos"/"Clientes nuevos", ni en ninguna otra parte del tablero. Pedido 07/09/2026. -->
+<!-- - breve descripcion de lo hecho: se corrigió el botón de captura de las 2 tarjetas "Venta activa" (con y sin NDCs) — ya no deja un margen en blanco a la derecha de la imagen (el botón, al estar dentro del flujo normal para quedar bien alineado, restaba espacio que antes quedaba vacío al sacarlo de la foto). Además, SÓLO en la imagen capturada (la tabla en pantalla no cambia), las columnas ahora se ajustan al contenido como una tabla dinámica de Excel, sin tanto espacio vacío entre ellas. -->
+
+<!-- 139 - Dashboard ventas REM 2026 - diagnostico captura compacta: el usuario reportó (07/09/2026) que, después de subir el archivo 138 (que debía corregir el margen en blanco a la derecha de la captura y comprimir las columnas "sólo en la imagen"), el problema persiste EXACTAMENTE igual en su entorno real: levantó un servidor local, abrió la versión 138 desde cero, cargó los datos reales del reporte y, al hacer clic en "Capturar" sobre la tarjeta "Venta activa · sin NDCs", la imagen resultante (que pegó directamente en el chat) sigue sin ser compacta y sigue teniendo la misma franja en blanco marcada en capturas anteriores. Esto descarta la hipótesis manejada previamente (que la captura que había mostrado el usuario fuera una imagen vieja/cacheada del portapapeles de WhatsApp): acá la prueba fue explícitamente fresca, con servidor recién levantado y datos recién cargados, y el resultado pegado es la salida real y actual de captureVentaSinNdcImage(). En paralelo, dentro de esta sesión se hizo una reproducción aislada del mecanismo exacto del archivo 138 en un navegador real (mismo HTML/CSS, misma tabla, mismo botón, mismo flujo de ocultar botón + agregar clase .capture-compact + medir + html2canvas + revertir en finally) y esa reproducción SÍ funciona correctamente: la tabla queda compacta (table-layout:auto, columnas ajustadas al contenido) y el único margen que queda es el padding normal de la tarjeta (~18-20px por lado, no un hueco grande). Se probaron y descartaron con evidencia concreta 3 hipótesis alternativas sobre por qué el entorno real del usuario podría diferir: (a) que los atributos style="width:X%" del <colgroup> de la tabla real siguieran forzando un ancho aunque table-layout pase a auto — descartado con un test de 3 variantes (colgroup con porcentajes, colgroup con auto, sin colgroup) que dieron el mismo ancho exacto en Chromium real; (b) que dejar el botón oculto (display:none) en vez de removido de alguna forma afectara la medición — descartado, ambos casos dieron resultados idénticos; (c) que el ancho del viewport influyera en el resultado — tampoco explica una diferencia de esta magnitud. Como no fue posible reproducir el bug real dentro de esta sesión pese a usar el código exacto del archivo 138, en vez de seguir probando hipótesis a ciegas y arriesgar otro cambio que tampoco resuelva el problema real, esta versión (139) es UN ARCHIVO DE DIAGNÓSTICO, sin ningún cambio de comportamiento respecto al 138: se agregaron líneas console.log('[capture-debug] ...') dentro de captureVentaSinNdcImage() y captureVentaNdcImage(), ubicadas justo después de ocultar el botón y agregar la clase capture-compact (o sea, en el mismo estado en que html2canvas va a fotografiar el bloque), que imprimen: el classList completo de la tarjeta (para confirmar que capture-compact realmente se agregó en el entorno real), el display computado de la tarjeta, el table-layout y el width computados de la tabla, el scrollWidth del bloque comparado con su getBoundingClientRect().width, y (sólo en la tarjeta sin NDCs) el ancho real de la primera celda de FECHA (que tiene colspan="2", una posible fuente de diferencia si el navegador del usuario maneja distinto el colspan bajo table-layout:auto). Estas líneas no cambian ningún cálculo, no afectan el resultado visual en pantalla ni el de la imagen capturada — sólo informan por consola. Se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó que las 11 apariciones de "capture-debug" en el archivo corresponden a las líneas esperadas repartidas entre las 2 funciones. El objetivo de este archivo es exclusivamente recolectar datos reales del entorno del usuario (con DevTools → pestaña Console) para poder identificar la verdadera causa de la diferencia entre el comportamiento observado en esta sesión y el que reporta el usuario, en vez de seguir iterando a ciegas sobre hipótesis ya descartadas. Sin cambios de comportamiento en ninguna otra parte del tablero. Pedido 07/09/2026. -->
+<!-- - breve descripcion de lo hecho: este archivo es sólo para diagnóstico, no cambia nada visible — se ve y funciona exactamente igual que el 138 (incluido el mismo problema que reportaste). Lo que hace es imprimir información técnica en la consola del navegador cada vez que apretás "Capturar", para poder ver qué está pasando realmente en tu computadora (porque en las pruebas de acá el archivo 138 sí funciona bien, así que necesito ver los datos reales de tu lado para encontrar la diferencia). -->
+
+<!-- 140 - Dashboard ventas REM 2026 - fix ancho columna cliente en captura compacta: siguiendo al archivo 139 (diagnóstico), el usuario pegó en el chat (07/09/2026) el resultado real de la consola del navegador (DevTools) al hacer clic en "Capturar" sobre la tarjeta "Venta activa · sin NDCs", con datos reales ya cargados. Los datos mostraron: classList de la tarjeta = "card capture-compact" (la clase se agrega bien), display computado = inline-block (correcto), table-layout computado = auto (correcto), pero width computado de la tabla = 1096.09px y ancho de la primera celda FECHA (colspan=2) = 416.515625px — un ancho enorme para una celda que sólo debería mostrar un texto corto tipo "▸ 01-Sep". La diferencia entre bloque.scrollWidth (1136px) y bloque.getBoundingClientRect().width (1138px) contra el ancho de la tabla (1096px) es sólo ~40px, exactamente el padding normal de la tarjeta — o sea que el fix del archivo 138 (medir después de compactar, tarjeta en inline-block) SÍ está funcionando: ya no sobra ningún margen en blanco por el botón. El problema real, antes no detectado, es otro: la celda de FECHA (colspan="2") es la MISMA columna donde, cuando un día (o "Tránsito de otros meses") está desplegado, se muestra el NOMBRE DEL CLIENTE en cada fila hija (ver _filaDiaHtml/_filaDiaHtmlNdc, y también la fila de cada cliente en "Vista clientes" de ambas tarjetas) — esa celda de nombre de cliente tiene white-space:nowrap+overflow:hidden+text-overflow:ellipsis puestos a mano, pero SIN un ancho o max-width propio: en pantalla, quien le pone un límite de ancho es el <colgroup> de la tabla (26%/34% según la vista), y por eso ahí el texto largo se corta con "…" con normalidad. Pero dentro de .capture-compact la tabla pasa a table-layout:auto (a propósito, para que las columnas numéricas se ajusten al contenido como una tabla dinámica), y bajo table-layout:auto el <colgroup> deja de mandar: el ancho de cada columna lo termina fijando el contenido MÁS ANCHO que haya en cualquier celda de esa columna en ese momento — si en el momento de capturar hay un día (o un cliente) desplegado con un nombre de cliente largo, esa columna (y toda la tabla) se estira para que ese nombre entre completo en una sola línea (por el white-space:nowrap, sin el que el texto haría salto de línea en vez de estirar la columna), ignorando por completo el overflow:hidden/text-overflow:ellipsis (que sólo recorta cuando la columna YA tiene un ancho definido más chico que el contenido, cosa que en auto no pasa). Esto explica el "416px de la celda FECHA" que reportó la consola, y por lo tanto explica también por qué la imagen le seguía pareciendo "no compacta" al usuario pese a que el fix de bordes/margen del archivo 138 sí estaba funcionando: con esa columna estirada a lo ancho del nombre de cliente más largo, las demás columnas (fechas cortas, números) quedan con muchísimo espacio de sobra a su alrededor, dando la sensación visual de "no comprimido" — el mismo síntoma que el usuario venía reportando desde el principio, pero con una causa distinta a la corregida en el 138 (que sí era real y sigue corregida). Esta causa no se había detectado antes porque las pruebas aisladas hechas en esta sesión (y descartadas: colgroup con %, colgroup en auto, sin colgroup, botón oculto vs. removido, ancho de viewport) nunca incluyeron un día/cliente REALMENTE desplegado con un nombre de cliente largo en el momento exacto de la captura — el dato real del usuario fue indispensable para encontrar esto. Implementación: se agregó la clase "cli-nm" a las 4 celdas de nombre de cliente que pueden aparecer dentro de los bloques capturables (la fila de cliente al desplegar un día en _filaDiaHtml, la fila de cliente en Vista clientes de "sin NDCs", la fila de cliente al desplegar un día en _filaDiaHtmlNdc, y la fila de cliente en Vista clientes de "con NDCs" — las 4 tenían exactamente el mismo problema, comparten el mismo patrón de nowrap sin ancho propio) y se agregó una regla CSS nueva, ".capture-compact table.tbl td.cli-nm{max-width:220px}", que SÓLO aplica mientras la tarjeta tiene la clase capture-compact (o sea, sólo durante el instante de la captura, nunca en pantalla) — con eso, aun bajo table-layout:auto, esa columna puntual queda acotada a 220px como máximo, dejando que el resto de columnas (fechas, números) vuelvan a ocupar sólo lo que necesitan de verdad, y el nombre de cliente que no entre se corta con "…" (igual criterio que ya usa la clase ".cl" existente en otras tablas del tablero, sólo que acotado a modo captura para no tocar nunca la tabla en pantalla). También se aprovechó este archivo para quitar los console.log de diagnóstico temporal agregados en el archivo 139 (ya cumplieron su función: permitieron encontrar esta causa real), dejando las 2 funciones de captura limpias, con el mismo try/finally del archivo 138 más esta única corrección de ancho. Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó que la clase "cli-nm" aparece exactamente 4 veces en el código (una por cada celda de nombre de cliente identificada) y que ya no queda ningún console.log de diagnóstico en el archivo (fuera del comentario de changelog del archivo 139, que se conserva como historial y sólo menciona la palabra en texto explicativo, no en código). No se pudo reproducir visualmente en esta sesión el caso exacto (nombre de cliente largo + día desplegado + captura) porque no se dispone de datos reales, pero el razonamiento queda respaldado directamente por los valores reales que informó la consola del usuario (416px en la celda FECHA con table-layout:auto y colgroup ignorado), no por una hipótesis nueva sin evidencia; conviene que el usuario pruebe de nuevo el botón "Capturar" con un día (o un cliente, en Vista clientes) desplegado que tenga un nombre de cliente largo, y confirme que ahora la imagen se ve compacta de punta a punta, sin columnas anormalmente anchas ni espacio de sobra, tanto en "Venta activa · sin NDCs" como en "Venta activa · con NDCs". Sin cambios en "Estado de remito", en las tarjetas "Clientes únicos"/"Clientes nuevos" (que no usan modo compacto de captura), ni en ninguna otra parte del tablero. Pedido 07/09/2026. -->
+<!-- - breve descripcion de lo hecho: encontré la causa real gracias a los datos que me pasaste de la consola — cuando capturás con un día (o un cliente) desplegado, el nombre del cliente hacía que esa columna se estirara mucho más de lo necesario (porque en modo "compacto" la tabla ajusta cada columna a su contenido, y un nombre largo sin límite de ancho se lleva puesto todo el ancho de la tabla). Ahora esa columna tiene un tope de ancho SÓLO durante la captura, y el nombre se corta con "…" si no entra — el resto de columnas vuelve a verse compacto como corresponde. Probé que no rompe nada más; te pido que confirmes con una captura real con algún cliente de nombre largo desplegado. -->
+
+<!-- 141 - Dashboard ventas REM 2026 - fix fondo filtrado y diagnostico ancho columnas: el usuario probó el archivo 140 en su entorno real (levantando un servidor local) y pegó 5 capturas: la primera es el tablero completo (para confirmar qué versión estaba corriendo), y las siguientes son resultados reales del botón "Capturar" en "Venta activa · sin NDCs", tanto en Vista diaria como en Vista clientes. Reportó 2 problemas que siguen presentes: (1) "la columna fecha y la columna firmada sigue teniendo ese espacio en blanco... quiero que esté perfectamente pegada una columna a la otra, no quiero que quede espacio en blanco de ninguna manera"; (2) "fuera de la tabla sobre el margen derecho, está copiando una porción del fondo del tablero y se ve en todas las capturas" (un problema NUEVO, no reportado antes de este archivo). Diagnóstico del problema (2) (sin necesidad de preguntarle nada al usuario, la causa se encontró revisando el código de captureVentaSinNdcImage/captureVentaNdcImage): ambas funciones llaman a html2canvas con windowWidth/windowHeight puestos igual al ancho/alto YA COMPACTADO del bloque (w/h, calculados después de aplicar la clase capture-compact) — windowWidth/windowHeight le dicen a html2canvas que renderice TODA la página como si la ventana del navegador tuviera ese ancho/alto (una especie de "resize" virtual de toda la página, no sólo del bloque capturado). Antes del archivo 138 (tabla ancha, similar al ancho real de pantalla) este resize virtual era chico y no cambiaba mucho el layout general del tablero; pero ahora que el archivo 138 comprime la tabla (y por lo tanto el bloque entero, que pasa a inline-block) a un ancho mucho más chico que el de la ventana real del usuario, ese mismo mecanismo fuerza a TODA la página a re-renderizarse en un ancho virtual mucho más angosto que el real — lo cual puede hacer que el resto del tablero (tarjetas KPI, filtros, otras secciones) se reacomode de forma distinta a como se ve en pantalla en ese instante, y que ese fondo reacomodado termine filtrándose en el borde de la imagen capturada. Esta misma mecánica existe en captureEstadoTablaImage() (archivo 127, sin cambios), pero ahí nunca causó este problema porque esa tabla no se comprime (no usa .capture-compact), así que su ancho real siempre fue parecido al ancho real de la ventana, sin un "resize" virtual brusco. Implementación: se quitaron las opciones windowWidth/windowHeight de las 2 llamadas a html2canvas en captureVentaSinNdcImage() y captureVentaNdcImage() (se dejaron width/height, que sólo fijan el tamaño del canvas de salida al tamaño real ya medido del bloque, sin forzar ningún resize de ventana) — así html2canvas renderiza usando el tamaño REAL de la ventana del usuario (sin tocar el layout del resto del tablero) y sólo recorta el resultado al bloque puntual, que es el comportamiento esperado. Sin cambios en captureEstadoTablaImage (nunca tuvo este problema, no se toca). En cuanto al problema (1) (espacio en blanco entre columna FECHA/CLIENTE y FIRMADA): se intentó reproducir en un navegador real, de forma aislada, el escenario más simple posible (una tabla con exactamente el mismo colgroup/colspan/estilos del archivo real, con una sola fila de día SIN ningún cliente desplegado) y esa reproducción NO mostró ningún espacio en blanco — la celda FECHA quedó ajustada a 56px, sin sobrante — lo cual indica que el fix del archivo 140 (acotar a 220px el ancho de la celda de nombre de cliente en filas desplegadas) sigue siendo válido para el caso que resuelve, pero no alcanza para explicar el espacio que el usuario sigue viendo en TODAS las capturas (incluso, según reporta, sin nada desplegado) — o bien hay algún día/cliente desplegado en el momento exacto de captura que no se nota en la imagen final (por ejemplo si la fila desplegada quedó más abajo, fuera del recorte visual con el que se comparó, cosa que sí puede pasar si la imagen se recortó/editó antes de pegarla en el chat), o bien hay otra causa aún no identificada. Como ya se erró una vez adivinando sin datos reales (archivo 138) y la corrección basada en datos reales del usuario si funcionó (archivo 140, confirmado por consola que el ancho de la celda FECHA/CLIENTE se relaciona con contenido de cliente desplegado), se prefiere NO adivinar una tercera vez: este archivo agrega una segunda tanda de diagnóstico (console.log('[capture-debug2] ...') en ambas funciones, ubicados en el mismo punto que los del archivo 139, ya limpios de la tanda anterior) que esta vez imprime, para CADA fila del cuerpo de la tabla en el momento exacto de capturar: el texto y el ancho real en píxeles de cada celda (con su colspan si aplica), y por separado si hay algún día desplegado (variable kpiDiaVtaActivo/kpiDiaNdcActivo) — con esto se puede confirmar de una sola vez si el ancho de la columna FECHA/CLIENTE viene de una fila de cliente desplegada (y en ese caso, si el tope de 220px realmente se está aplicando o no) o si el origen es otro. Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores) y se confirmó que ya no queda ningún windowWidth/windowHeight en las 2 funciones de "Venta activa" (sólo sigue en captureEstadoTablaImage, sin tocar), y que las nuevas líneas de diagnóstico están ubicadas antes de la llamada a html2canvas en ambas funciones. Se le pide al usuario que: (a) confirme si el problema del fondo filtrado en el margen ya se resolvió con este archivo; (b) para el espacio en blanco entre columnas, abra la consola del navegador (F12 → Console), haga clic en "Capturar" SIN tener nada desplegado, y pegue las líneas "[capture-debug2]" resultantes — y si el problema persiste con algo desplegado, que lo intente también con un día o cliente desplegado y pegue esas líneas también, para poder comparar ambos casos con datos reales. Sin cambios en "Estado de remito", en las tarjetas "Clientes únicos"/"Clientes nuevos", ni en ninguna otra parte del tablero. Pedido 07/09/2026. -->
+<!-- - breve descripcion de lo hecho: arreglé el problema del fondo del tablero que se colaba en el margen de la imagen — era un efecto secundario de cómo se armaba la captura ahora que la tabla es más chica (compacta), que hacía que el resto de la página se reacomodara "por dentro" al generar la imagen. Para el espacio en blanco entre la columna de fecha/cliente y la de firmada: no lo pude reproducir en mis pruebas con el mismo código, así que agregué otra tanda de información de diagnóstico (como la del archivo 139) para ver exactamente qué está pasando en tu pantalla. Por favor probá de nuevo: primero confirmame si ya no aparece el fondo filtrado, y para el espacio en blanco, hacé clic en "Capturar" con la consola abierta (F12) sin nada desplegado y pegame las líneas "[capture-debug2]" — si el problema sigue, probá también con un día o cliente desplegado y pegame esas líneas también. -->
+
+<!-- 142 - Dashboard ventas REM 2026 - autofit real de columnas en captura compacta: siguiendo al archivo 141, el usuario confirmó que el problema del fondo filtrado en el margen ya se resolvió, pero el espacio en blanco entre la columna FECHA/CLIENTE y FIRMADA seguía exactamente igual — y pegó los datos reales de consola: con la tabla SIN ningún día desplegado (kpiDiaVtaActivo: null, sólo 5 filas en el cuerpo: 01-Sep a 04-Sep + "Tránsito de otros meses"), la celda FECHA (colspan=2) medía 417px en las 5 filas por igual, y las demás columnas 153/153/132/132/110px — anchos que, se confirmó haciendo la cuenta, son EXACTAMENTE proporcionales a los porcentajes del <colgroup> original (12%/26%/14%/14%/12%/12%/10% ≈ 38%/14%/14%/12%/12%/10% de un ancho total de ~1097px) — como si table-layout siguiera siendo "fixed" pese a que el propio diagnóstico del archivo 139 había confirmado que el estilo computado de table-layout SÍ decía "auto". Se intentó reproducir este caso puntual (mismo colgroup, mismos 5 textos reales, misma fuente Outfit/IBM Plex Mono cargada desde Google Fonts) de forma aislada en un navegador real dentro de esta sesión, y esa reproducción NO mostró el problema: la celda FECHA se ajustó correctamente a 157px (el ancho real que necesita "Tránsito de otros meses", el texto más largo de esa columna), sin ningún sobrante — es decir, el mecanismo de table-layout:auto del archivo 138 parece comportarse de forma inconsistente entre el entorno de pruebas de esta sesión y el entorno real del usuario, sin que se haya podido identificar la causa exacta de esa diferencia (podría deberse a la carga de fuentes, a algún contenedor/ancestro del bloque no replicado en la prueba aislada, o a alguna particularidad del navegador/sistema operativo del usuario). Dado que ya se intentó 2 veces ajustar parámetros de table-layout:auto (archivos 138 y 140) sin lograr un resultado consistente en el entorno real, se decidió CAMBIAR DE ESTRATEGIA por completo en vez de seguir ajustando ese mecanismo: en lugar de confiar en que el navegador calcule el ancho de columnas "automático" (cuyo algoritmo de resolución para columnas con colspan y <col> con ancho en porcentaje no está del todo especificado y, como quedó demostrado, se comporta distinto según el entorno), esta versión MIDE ELLA MISMA el ancho real que necesita cada celda, usando el método measureText() de un <canvas> 2D fuera de pantalla con la fuente/tamaño/peso YA COMPUTADOS de cada celda (getComputedStyle) — una técnica que no depende en absoluto de ningún algoritmo de layout de tablas del navegador, sólo de medir texto, algo consistente en cualquier entorno. Implementación: función nueva _autofitCaptureCols(bloque), llamada en ambas funciones de captura (captureVentaSinNdcImage/captureVentaNdcImage) justo después de agregar la clase capture-compact (mismo punto donde antes estaban los console.log de diagnóstico, ya removidos): recorre todas las filas de thead/tbody/tfoot de la tabla, mide con el canvas el ancho de texto + padding de cada celda (repartiendo proporcionalmente el ancho de las celdas con colspan entre las columnas que abarcan, y tomando el máximo entre todas las filas para cada columna — la celda de nombre de cliente, clase "cli-nm" del archivo 140, sigue topeada a 220px como antes), fija cada <col> a ese ancho exacto en píxeles, y cambia table-layout a "fixed" (con !important puesto directamente inline, que por cascada de CSS le gana a cualquier regla !important de hoja de estilos) — a diferencia de "auto", "fixed" SIEMPRE respeta al pie de la letra los anchos de columna ya declarados sin volver a reinterpretarlos según el contenido, eliminando toda ambigüedad: el resultado es 100% determinístico, calculado por nosotros mismos en vez de dejarlo en manos de un algoritmo de navegador que demostró no ser confiable en este caso. La función devuelve un "deshacer" que cada captura ejecuta en su finally (restaura el ancho original de cada <col> y el table-layout previo), así la tabla en pantalla nunca queda pegada en modo compacto, igual criterio que ya se usaba para la clase capture-compact y el botón oculto. Verificación: se corrió el chequeo de sintaxis completo del archivo con Node (sin errores); se confirmó que _autofitCaptureCols está definida una sola vez y se llama exactamente una vez en cada una de las 2 funciones de captura, y que ya no queda ningún console.log de diagnóstico en el código (sólo en los comentarios de changelog de archivos anteriores, que se conservan como historial). Se probó el mecanismo completo (medición + fijado de <col> + table-layout:fixed) en un navegador real dentro de esta sesión, replicando el escenario exacto que reportó el usuario (5 filas, mismos textos, sin nada desplegado): dio un resultado tight/ajustado sin ningún espacio de sobra (157px para FECHA, exactamente lo que necesita el texto más largo de esa columna) — no se pudo confirmar en el entorno real del usuario dentro de esta sesión, pero al no depender ya de ningún comportamiento específico de table-layout:auto (la pieza que se comportaba distinto entre entornos), este enfoque debería ser consistente sea cual sea la causa real de la diferencia anterior; se le pide al usuario que pruebe de nuevo el botón "Capturar" en ambas tarjetas y vistas y confirme si el espacio en blanco entre columnas ya desapareció. Sin cambios en "Estado de remito", en las tarjetas "Clientes únicos"/"Clientes nuevos", ni en ninguna otra parte del tablero. Pedido 07/09/2026. -->
+<!-- - breve descripcion de lo hecho: cambié el enfoque de raíz para el ajuste de columnas en la captura — en vez de pedirle al navegador que las ajuste automáticamente (que es lo que venía fallando de forma rara sólo en tu computadora), ahora mido yo mismo el ancho real que necesita el texto de cada columna y se lo fijo a la tabla de forma exacta, sin dejarle margen de interpretación al navegador. Esto debería eliminar el espacio en blanco entre columnas sin importar el entorno. Probé el mecanismo en mis pruebas y da un resultado bien ajustado, pero necesito que lo confirmes en tu pantalla — probá capturar de nuevo en ambas tarjetas ("sin NDCs" y "con NDCs") y en ambas vistas (diaria y clientes), y contame si ahora sí queda todo pegado sin espacios. -->

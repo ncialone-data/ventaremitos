@@ -723,8 +723,15 @@ let kpiActiveCard=null;   // 'ventaNdc' | 'ventaSinNdc' | 'cliUnicos' | 'cliNuev
 // detalle desplegable, un switch propio "vista diaria" / "vista mensual" (no afecta a las
 // otras 3 tarjetas clickeables, que siguen mostrando su listado simple de siempre).
 let kpiVentaVista='diaria'; // 'diaria' | 'mensual' — se mantiene aunque se cierre/reabra la tarjeta
-let kpiDiaVtaActivo=null;   // dayKey ("mes|day") del día desplegado en la vista diaria (uno solo a la vez)
-let kpiClienteTransitoActivo=null; // cliente con el detalle "mes actual/acumulado anterior" desplegado en vista mensual (uno solo a la vez)
+// Multi-selección (pedido 10/09/2026, archivo 149): estas 3 variables eran un solo valor
+// activo ("uno a la vez", se cerraba el anterior al abrir otro). El usuario pidió poder
+// desplegar VARIAS fechas/clientes/meses a la vez en la tabla "Venta activa · sin NDCs" —
+// pasan a ser Sets (mismo patrón que estDiaClienteExpandido, más arriba), sin límite de
+// cuántos elementos pueden estar abiertos simultáneamente. Se mantiene el mismo criterio de
+// antes: sobreviven aunque se cierre/reabra la tarjeta o se cambie de switch (diaria/
+// clientes/sin tránsito/solo tránsito) — ningún switch resetea estos Sets.
+const kpiDiaVtaActivas=new Set();   // dayKeys ("mes|day") desplegados en la vista diaria
+const kpiClienteTransitoActivas=new Set(); // clientes con el detalle "mes actual/acumulado anterior" desplegado en vista clientes
 // Switch "Sin tránsito" (pedido 10/09/2026, sólo para la tarjeta "Venta remitos" con columna
 // TRANSITO — la tarjeta "con NDCs" no tiene Tránsito y no usa esta variable): al activarlo, se
 // excluyen por completo los remitos en estado Tránsito de ambas vistas (diaria y clientes) —
@@ -744,7 +751,7 @@ let kpiVentaSinTransito=false;
 // kpiVentaVista está en 'diaria' o 'mensual' (esos 2 botones quedan deshabilitados mientras
 // tanto, confirmado por multiple choice) — se mantiene aunque se cierre/reabra la tarjeta.
 let kpiVentaSoloTransito=false;
-let kpiMesTransitoActivo=null; // mes ("AAAA-MM") desplegado en la vista "Solo tránsito" (uno solo a la vez)
+const kpiMesTransitoActivas=new Set(); // meses ("AAAA-MM") desplegados en la vista "Solo tránsito" (multi-selección, ver comentario arriba)
 // NUEVO — pedido 06/09/2026: la 1ra tarjeta KPI ("Venta activa · con NDCs", data-card="ventaNdc")
 // gana la MISMA tabla desplegable (switch vista diaria/vista clientes + botón de captura) que
 // ya tiene la 2da tarjeta ("Venta activa · sin NDCs") desde los archivos 131-134, pero
@@ -2692,7 +2699,7 @@ function computeVentaSoloTransito(){
 // estructura de columnas y mismo mecanismo de expandir/colapsar (data-daykey), para no
 // duplicar el marcado y evitar el tipo de desalineación de columnas que tuvimos antes.
 function _filaDiaHtml(key,label,tot,clientesMap,{especial=false,ocultarTransito=false}={}){
-  const open=kpiDiaVtaActivo===key;
+  const open=kpiDiaVtaActivas.has(key);
   const cel=(v)=>`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px">${v?fmtFull(v):'—'}</td>`;
   const celCli=(v)=>`<td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px">${v?fmtFull(v):'—'}</td>`;
   const clientesList=Object.entries(clientesMap)
@@ -2719,7 +2726,7 @@ function _filaDiaHtml(key,label,tot,clientesMap,{especial=false,ocultarTransito=
 // (MES/TRANSITO/TOTAL, TRANSITO y TOTAL siempre iguales porque en esta vista no hay otro
 // estado). Clic en el mes despliega el detalle de clientes de ese mes con su importe.
 function _filaMesTransitoHtml(mesKey,label,total,clientesMap){
-  const open=kpiMesTransitoActivo===mesKey;
+  const open=kpiMesTransitoActivas.has(mesKey);
   const clientesList=Object.entries(clientesMap)
     .map(([cliente,vta])=>({cliente,vta}))
     .sort((a,b)=>b.vta-a.vta);
@@ -2814,7 +2821,7 @@ function renderVentaSinNdcMensualBody(){
   };
   const rowsHtml=list.map(c=>{
     const tieneAnterior=c.transitoAnterior>0;
-    const open=tieneAnterior&&kpiClienteTransitoActivo===c.cliente;
+    const open=tieneAnterior&&kpiClienteTransitoActivas.has(c.cliente);
     const detalle=open?`<tr style="border-bottom:1px solid var(--line);background:rgba(245,158,11,.06)">
       <td colspan="6" style="padding:6px 8px 8px 24px">
         <div style="display:flex;gap:24px;font-size:11px;color:var(--mut2)">
@@ -2971,14 +2978,14 @@ function renderVentaSinNdcDetalle(wrap){
   wrap.querySelectorAll('tr[data-daykey]').forEach(tr=>{
     tr.onclick=()=>{
       const k=tr.dataset.daykey;
-      kpiDiaVtaActivo=(kpiDiaVtaActivo===k)?null:k;
+      if(kpiDiaVtaActivas.has(k))kpiDiaVtaActivas.delete(k);else kpiDiaVtaActivas.add(k);
       renderKpiDetalle();
     };
   });
   wrap.querySelectorAll('tr[data-mestransito]').forEach(tr=>{
     tr.onclick=()=>{
       const k=tr.dataset.mestransito;
-      kpiMesTransitoActivo=(kpiMesTransitoActivo===k)?null:k;
+      if(kpiMesTransitoActivas.has(k))kpiMesTransitoActivas.delete(k);else kpiMesTransitoActivas.add(k);
       renderKpiDetalle();
     };
   });
@@ -2986,7 +2993,7 @@ function renderVentaSinNdcDetalle(wrap){
     const cli=tr.dataset.cliTransito;
     if(!cli) return; // fila sin Tránsito de meses anteriores: no es clickeable
     tr.onclick=()=>{
-      kpiClienteTransitoActivo=(kpiClienteTransitoActivo===cli)?null:cli;
+      if(kpiClienteTransitoActivas.has(cli))kpiClienteTransitoActivas.delete(cli);else kpiClienteTransitoActivas.add(cli);
       renderKpiDetalle();
     };
   });
@@ -4691,3 +4698,6 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 148 - Dashboard ventas REM 2026 - fix ancho header captura deja espacio en blanco: el usuario reportó (10/09/2026, sobre el archivo 147 ya corregido, con 2 capturas: una de "Sin tránsito" con 7 columnas bien alineadas, otra de "Solo tránsito" con un rectángulo en blanco marcado a mano a la derecha de la tabla de 3 columnas) un bug DISTINTO al ya resuelto en el archivo 147: "AL DAR CLIC EN CAPTURAR CUANDO ESTA SELECCIONADO SOLO TRANSITO, LA PANTALLA PARPADEA Y SE AJUSTA EL ANCHO DE LA TABLA A LA CANTIDAD DE COLUMNAS pero la captura termina saliendo mas alineada como si tuviera mas columnas, quedando espacio en blanco innecesario" — confirmado que las columnas EN SÍ ya no están desalineadas entre ellas (el fix del 147 sigue funcionando), el problema ahora es un hueco en blanco entero al lado derecho de la tabla, sólo notorio en la vista "Solo tránsito" (3 columnas angostas: MES/TRANSITO/TOTAL). Diagnóstico (por lectura de código, mismo criterio de "medir antes de fijar anchos" ya usado en los archivos 138-142): en modo .capture-compact la tarjeta (.card) pasa a display:inline-block para encogerse a su contenido (shrink-to-fit), pero su ancho final termina fijado por el hijo MÁS ANCHO de los dos que tiene — normalmente la tabla (que ahora, gracias al archivo 147, mide exactamente lo que _autofitCaptureCols() calculó), pero ".c-head" (la fila del título + hasta 4 pastillas de switch: "Vista diaria"/"Vista clientes"/"Sin tránsito"/"Solo tránsito", más el período y el botón Capturar) es un flex-row SIN ningún límite de ancho propio — su ancho natural (con las 4 pastillas + el título completo) puede superar cómodamente el ancho ya ajustado de una tabla angosta de sólo 3 columnas. Esto nunca se notó con las tablas de 7/6 columnas de "Vista diaria"/"Vista clientes" (siempre más anchas que el propio encabezado, aun con las 4 pastillas), pero con la tabla angosta de "Solo tránsito" el encabezado termina siendo el hijo más ancho, y el bloque inline-block queda tan ancho como ÉL, dejando el espacio sobrante vacío al lado de la tabla — exactamente el rectángulo que el usuario marcó a mano en su captura. Fix, en 2 partes: (1) en el <style>, nueva regla ".capture-compact .c-head{flex-wrap:wrap}" — permite que el encabezado pase a una segunda línea en vez de forzar ese ancho de más, aunque por sí sola dejaría un título cortado a la mitad sin necesidad si la tabla en verdad pudiera ser igual de ancha; (2) el fix real, dentro de _autofitCaptureCols(): justo antes de fijar los anchos definitivos de columna, se mide el ancho NATURAL/mínimo de ".c-head" (el que tendría si pudiera ocupar todo el espacio que necesite, sin el flex-wrap agregado en el punto 1) usando el truco de "width:max-content" + getBoundingClientRect().width, revertido inmediatamente después de leer el valor (con flex-wrap también temporalmente forzado a "nowrap" durante la medición, para leer el ancho realmente natural en una sola línea); si ese ancho natural del header supera el ancho ya calculado de la tabla (la suma de colMax[], antes de redondear/asignar a los <col>), se escala PROPORCIONALMENTE cada columna (mismo factor de escala para todas, para no alterar la proporción relativa entre columnas) hasta que la tabla alcance/supere el ancho que pide el encabezado — el resultado es que la tabla de "Solo tránsito" queda un poco más espaciosa que antes, pero SIN ningún hueco en blanco, igual que las otras 2 vistas. Se prefirió agrandar la tabla (en vez de encoger o sacar pastillas del encabezado) porque el título+switch ya tiene su propio ancho mínimo legible, mientras que una tabla angosta de pocas columnas sí puede permitirse columnas algo más anchas sin perder legibilidad ni verse rara. Como el fix vive dentro de _autofitCaptureCols() (la misma función compartida corregida en el archivo 147), beneficia por igual a los 2 botones "Capturar" que la usan ("Venta activa · sin NDCs"/"Venta remitos" y "Venta activa · con NDCs") y no afecta en absoluto a las tablas de 6/7 columnas (el ancho natural del encabezado nunca supera ahí al de la tabla, así que el factor de escala queda en 1 y no cambia nada respecto del comportamiento ya corregido en el archivo 147). No se tocó "Estado de remito" (su botón de captura, captureEstadoTablaImage, no usa _autofitCaptureCols ni .capture-compact, es position:absolute y nunca tuvo este problema). Reconstrucción de este archivo: partiendo explícitamente del archivo 147 (todo el contenido preexistente copiado sin cambios salvo la inserción puntual documentada arriba), vía lectura/escritura por chunks — el acceso a shell (mcp__workspace__bash) siguió sin funcionar en esta sesión (mismo error de montaje Plan9 ya documentado en los archivos 145-147), así que no se pudo correr `node --check` ni ningún test aislado sobre el archivo completo; se revisó a mano cada anclaje de las ediciones para que el contenido copiado fuera textualmente idéntico al original y que la función modificada (_autofitCaptureCols) quedara sintácticamente balanceada, pero, a diferencia del archivo 147 (que sí pudo verificarse en un navegador real), este fix quedó fundamentado únicamente en el razonamiento de layout/CSS descripto arriba, sin una prueba visual en vivo dentro de esta sesión. Pedido 10/09/2026. -->
 <!-- - breve descripcion de lo hecho: se corrigió un segundo bug de la captura de "Solo tránsito" (distinto al del archivo 147, que ya arreglaba la desalineación entre columnas): quedaba un rectángulo en blanco a la derecha de la tabla angosta de 3 columnas, porque el título+switch (que puede tener hasta 4 pastillas) era más ancho que esa tabla en particular, y la tarjeta terminaba tomando el ancho del encabezado en vez del de la tabla. Ahora, si el encabezado necesita más ancho que la tabla, se agranda proporcionalmente la tabla para que lo alcance — así no queda ningún espacio vacío, en ninguna de las vistas ni tarjetas. A diferencia del archivo 147, esta vez no pude probarlo en un navegador real (mismo problema de acceso al entorno que ya venía de archivos anteriores), así que quedaría bien que lo confirmes con una captura nueva de "Solo tránsito" antes de seguir construyendo encima. -->
+
+<!-- 149 - Dashboard ventas REM 2026 - multi-seleccion en detalle Venta activa sin NDCs: el usuario pidió (10/09/2026) que, en la tabla desplegable de la 2da tarjeta KPI ("Venta activa · sin NDCs", data-card="ventaSinNdc" — la que tiene los 4 switches "Vista diaria"/"Vista clientes"/"Sin tránsito"/"Solo tránsito"), se pueda desplegar MÁS DE una fecha/cliente/mes a la vez, sin importar cuál de los switches esté activo en ese momento — hasta este archivo, cada uno de los 3 tipos de fila expandible de esa tabla ("uno solo a la vez", mismo patrón usado en el resto del tablero) se cerraba automáticamente al abrir otro. Antes de tocar código se confirmó, leyendo el código real (archivos 131/132/146), que el pedido aplica a exactamente 3 variables de estado, todas propias de ESTA tarjeta en particular: kpiDiaVtaActivo (día expandido en "Vista diaria"), kpiClienteTransitoActivo (cliente expandido en "Vista clientes", con el detalle "Mes actual/Acumulado meses anteriores") y kpiMesTransitoActivo (mes expandido en "Solo tránsito") — el switch "Sin tránsito" en sí no tiene fila propia, sólo recalcula los datos de las otras 2 vistas, así que no necesita ningún cambio. No se tocó la 1ra tarjeta KPI ("Venta activa · con NDCs"), que sólo tiene 2 switches (sin "Sin tránsito"/"Solo tránsito") y no fue parte del pedido. Implementación: las 3 variables, que eran un valor único (`let x=null`, comparado con `===` y reasignado con el patrón `x=(x===k)?null:k`), pasan a ser Sets (`const x=new Set()`), exactamente el mismo patrón que ya usa estDiaClienteExpandido en la sección "Estado de remito" del propio tablero (comprobación con `.has(key)`, alternancia con `if(x.has(k))x.delete(k);else x.add(k)`) — no se inventó ningún mecanismo nuevo, se extendió uno que el código ya tenía probado en otro lugar. Cambios puntuales: (1) las 2 declaraciones de kpiDiaVtaActivo/kpiClienteTransitoActivo y la de kpiMesTransitoActivo pasan a kpiDiaVtaActivas/kpiClienteTransitoActivas/kpiMesTransitoActivas (Sets); (2) en _filaDiaHtml() y _filaMesTransitoHtml(), el cálculo de "open" de cada fila pasa de comparación (`===key`) a `.has(key)`; (3) en renderVentaSinNdcMensualBody(), el cálculo de "open" de cada cliente pasa a `.has(c.cliente)`; (4) los 3 listeners de clic (tr[data-daykey], tr[data-mestransito], tr[data-cli-transito]) pasan de reasignar la variable a alternar la clave dentro del Set correspondiente. Ningún cálculo de $ ni de agrupación se tocó (computeVentaSinNdcDiario/computeVentaSinNdcMensual/computeVentaSoloTransito, _totEstadoRow, etc. quedan intactos) — el cambio es puramente de qué filas se muestran expandidas a la vez, no de qué datos contiene cada fila. Se mantiene el mismo criterio ya documentado de estas 3 variables: persisten aunque se cierre/reabra la tarjeta o se cambie de switch (ningún switch limpia estos Sets). Verificado con `node --check` sobre el bloque <script> completo, `diff` contra el archivo 148 (confirma que sólo cambiaron las 3 declaraciones + las 6 líneas de uso, sin tocar ninguna otra función), y un test aislado en Node que simula clics reales sobre los 3 Sets: confirma que se pueden abrir 3 días distintos en Vista diaria a la vez (los 3 quedan con open=true), que un clic en un día ya abierto lo cierra sin afectar a los otros 2, y que Vista clientes y Solo tránsito se comportan igual y de forma independiente entre sí (abrir clientes no afecta los días abiertos, ni viceversa). Pedido 10/09/2026. -->
+<!-- - breve descripcion de lo hecho: en la tabla desplegable de "Venta activa · sin NDCs" ahora se pueden tener varias fechas, clientes o meses expandidos al mismo tiempo (antes, al abrir uno se cerraba el que estaba abierto antes) — funciona igual en Vista diaria, Vista clientes y Solo tránsito, sin ninguna restricción de cantidad. -->

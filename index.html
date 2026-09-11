@@ -384,9 +384,10 @@ svg{display:block;width:100%;overflow:visible}
     <span class="c-title">Pedidos pendientes de facturar</span>
     <span class="c-note" id="pendientesNote">actualizá los datos para cargar</span>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px" id="pendientesKpis">
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px" id="pendientesKpis">
     <div class="kpi"><div class="k-lbl">—</div></div>
     <div class="kpi"><div class="k-lbl">—</div></div>
+    <div class="kpi pend-alert"><div class="k-lbl">—</div></div>
     <div class="kpi pend-alert"><div class="k-lbl">—</div></div>
   </div>
   <div id="pendientesDetalleWrap"></div>
@@ -1808,9 +1809,32 @@ function parseCsvText(csv) {
 let PEND_DATA=null;
 let PEND_RAW=null;
 let PEND_LIST=[]; // pedidos únicos filtrados: {num,fecha,dias,rso,rubro,emp,total}
-let pendActiveCard=null; // 'ok' | 'vencidos' | 'todos' | null
+// Detalle de productos por pedido (pedido 10/09/2026): al hacer clic en una fila de pedido,
+// en cualquiera de las 4 tarjetas de "Pedidos pendientes de facturar", se despliega el
+// listado de líneas de producto de ESE pedido (PRO CODIGO/PRODUCTO/CANTIDAD/COSTO/PRECIO/
+// TOTAL/RENTABILIDAD, tal como vienen en la solapa PEDIDOS PENDIENTES). PEND_LINES_BY_NUM se
+// arma en calcPendientesFiltered(), agrupando por NUMERO PEDIDO con el MISMO filtro (rubFilter)
+// que ya se usa para armar PEND_LIST — así el detalle de líneas de un pedido siempre suma
+// exactamente lo mismo que su fila agregada, esté o no filtrado por rubro.
+let PEND_LINES_BY_NUM={}; // { numeroPedido: [{codigo,producto,cantidad,costo,precio,total,rentabilidad}, ...] }
+// Set (no "uno solo a la vez"): se puede tener el detalle de varios pedidos desplegado al
+// mismo tiempo para compararlos, mismo criterio ya usado en remExpanded/pendComExpanded más
+// abajo. Compartido entre las 4 tarjetas (un NUMERO PEDIDO es único en todo el universo de
+// pendientes, no hay ambigüedad si aparece expandido en más de una).
+const pendPedidoExpandido=new Set();
+let pendActiveCard=null; // 'ok' | 'vencidos' | 'todos' | 'bajaUtilidad' | null
 let pendSortCol='total'; // columna activa de orden
 let pendSortDir='desc'; // 'asc' | 'desc'
+// Tarjeta "Baja utilidad" (pedido 10/09/2026): 4ta tarjeta de "Pedidos pendientes de
+// facturar", en rojo como "Vencidos +45 días", pero para pedidos con rentabilidad <50%
+// (agregada por pedido: VENTA=suma de TOTAL de sus líneas, COSTO=suma de COSTO×CANTIDAD de
+// sus líneas — columnas W/S de la solapa PEDIDOS PENDIENTES —, UTILIDAD=VENTA-COSTO, %util=
+// UTILIDAD/VENTA×100). Tabla de detalle propia (columnas distintas a las otras 3 tarjetas:
+// N° PEDIDO/CLIENTE/FECHA/DÍAS/EMPRESA/COSTO/VENTA/UTILIDAD/IMPORTE), por eso usa su propio
+// estado de orden en vez de compartir pendSortCol/pendSortDir (esas 2 tablas no comparten
+// ninguna columna en común salvo num/rso/fecha/dias/emp).
+let pendUtilSortCol='pctUtil'; // columna activa de orden de la tabla de "Baja utilidad"
+let pendUtilSortDir='asc'; // 'asc' | 'desc' — arranca ascendente (peor utilidad primero)
 let remSortCol='vta'; let remSortDir='desc'; // orden tabla "Remitos por comercial"
 const remExpanded=new Set(); // comerciales expandidos en "Remitos por comercial"
 let pendComSortCol='vta'; let pendComSortDir='desc'; // orden tabla "Pendientes por comercial" (historico completo)
@@ -1852,6 +1876,7 @@ function renderPendientes(){
   const red='#f87171';
   const pctOk=d.tot>0?(d.cntOk/d.tot*100):0;
   const pctAl=100-pctOk;
+  const pctBajaUtil=d.tot>0?(d.cntBajaUtil/d.tot*100):0;
   document.getElementById('pendientesNote').textContent=`${d.tot} pedidos únicos · al día de hoy`;
   document.getElementById('pendientesKpis').innerHTML=`
     <div class="kpi pend-clickable" data-card="ok">
@@ -1878,6 +1903,15 @@ function renderPendientes(){
       </div>
       <div class="k-sub" style="color:${red}">Mayor a 45 días · ${pctAl.toFixed(1)}%</div>
       <div class="pend-track"><div class="pend-fill" style="width:${pctAl.toFixed(1)}%;background:${red}"></div></div>
+    </div>
+    <div class="kpi pend-alert pend-clickable" data-card="bajaUtilidad">
+      <div class="k-lbl" style="color:${red}">Baja utilidad</div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:8px;gap:6px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:clamp(20px,2.4vw,32px);font-weight:600;color:${red}">${d.cntBajaUtil.toLocaleString('es-AR')}</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:clamp(15px,1.8vw,22px);font-weight:600;color:${red};text-align:right">${fmtFull(d.vtaBajaUtil)}</span>
+      </div>
+      <div class="k-sub" style="color:${red}">Rentabilidad menor a 50% · ${pctBajaUtil.toFixed(1)}%</div>
+      <div class="pend-track"><div class="pend-fill" style="width:${pctBajaUtil.toFixed(1)}%;background:${red}"></div></div>
     </div>`;
   document.querySelectorAll('#pendientesKpis .kpi').forEach(el=>{
     el.classList.toggle('pend-card-on', el.dataset.card===pendActiveCard);
@@ -1894,10 +1928,57 @@ function togglePendDetalle(card){
   renderPendientesDetalle();
 }
 
+// Detalle de productos de un pedido (pedido 10/09/2026) — compartido por las 4 tarjetas de
+// "Pedidos pendientes de facturar" (renderPendientesDetalle y renderBajaUtilidadDetalle),
+// ambas arman su propia tabla de pedidos pero delegan en esta misma función/wiring para no
+// duplicar el mecanismo de expandir/colapsar. "colspan" es la cantidad de columnas de la
+// tabla que la está usando (7 en las 3 primeras tarjetas, 9 en "Baja utilidad").
+function _pedidoLineasHtml(num,colspan){
+  if(!pendPedidoExpandido.has(num)) return '';
+  const lineas=(PEND_LINES_BY_NUM[num]||[]).slice().sort((a,b)=>b.total-a.total);
+  const fmtV=v=>Math.round(v).toLocaleString('es-AR');
+  if(!lineas.length){
+    return `<tr style="background:rgba(96,165,250,.05)"><td colspan="${colspan}" style="padding:8px 8px 10px 24px;font-size:11px;color:var(--mut)">Sin productos para este pedido.</td></tr>`;
+  }
+  const th=(lbl,align)=>`<th style="padding:4px 8px;text-align:${align};font-size:10px;color:var(--mut2);text-transform:uppercase;letter-spacing:.06em;font-weight:600">${lbl}</th>`;
+  const td=(v,align)=>`<td style="padding:4px 8px;text-align:${align};font-family:'IBM Plex Mono',monospace;font-size:11px">${v}</td>`;
+  const rowsHtml=lineas.map(l=>`<tr style="border-bottom:1px solid var(--line)">
+    <td style="padding:4px 8px;font-size:11px;color:var(--mut2);white-space:nowrap">${l.codigo||'—'}</td>
+    <td style="padding:4px 8px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0">${l.producto||'—'}</td>
+    ${td(l.cantidad.toLocaleString('es-AR'),'right')}
+    ${td('$'+fmtV(l.costo),'right')}
+    ${td('$'+fmtV(l.precio),'right')}
+    ${td('$'+fmtV(l.total),'right')}
+    ${td(l.rentabilidad.toFixed(0)+'%','right')}
+  </tr>`).join('');
+  return `<tr style="background:rgba(96,165,250,.05)"><td colspan="${colspan}" style="padding:6px 8px 10px 24px">
+    <table style="width:100%;border-collapse:collapse;table-layout:fixed">
+      <colgroup><col style="width:14%"><col style="width:34%"><col style="width:10%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:10%"></colgroup>
+      <thead><tr style="border-bottom:1px solid var(--line2)">
+        ${th('Código','left')}${th('Producto','left')}${th('Cant.','right')}${th('Costo','right')}${th('Precio','right')}${th('Total','right')}${th('Rent.','right')}
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  </td></tr>`;
+}
+function _wirePedidoRowClicks(wrap){
+  wrap.querySelectorAll('tr[data-pedido-num]').forEach(tr=>{
+    tr.onclick=()=>{
+      const k=tr.dataset.pedidoNum;
+      if(pendPedidoExpandido.has(k))pendPedidoExpandido.delete(k);else pendPedidoExpandido.add(k);
+      renderPendientesDetalle();
+    };
+  });
+}
+
 function renderPendientesDetalle(){
   const wrap=document.getElementById('pendientesDetalleWrap');
   if(!wrap)return;
   if(!pendActiveCard||!PEND_LIST||!PEND_LIST.length){ wrap.innerHTML=''; return; }
+  // Tarjeta "Baja utilidad" (pedido 10/09/2026): columnas completamente distintas a las
+  // otras 3 (COSTO/VENTA/UTILIDAD en vez de RUBRO), así que se resuelve en una función propia
+  // en vez de sumarle más ramas al armado de "cols"/"rows" de acá abajo.
+  if(pendActiveCard==='bajaUtilidad'){ renderBajaUtilidadDetalle(wrap); return; }
   let rows, titulo;
   if(pendActiveCard==='ok'){ rows=PEND_LIST.filter(p=>p.dias<=45); titulo='Pedidos pendientes · menor a 45 días'; }
   else if(pendActiveCard==='vencidos'){ rows=PEND_LIST.filter(p=>p.dias>45); titulo='Pedidos vencidos · mayor a 45 días'; }
@@ -1929,7 +2010,7 @@ function renderPendientesDetalle(){
   ];
   wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
     <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">${titulo} · ${rows.length.toLocaleString('es-AR')} pedidos</div>
-    <div style="max-height:340px;overflow-y:auto">
+    <div>
       <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
         <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
         <thead><tr style="border-bottom:1px solid var(--line2)">
@@ -1939,24 +2020,113 @@ function renderPendientesDetalle(){
           const diaCol=p.dias>45?'#f87171':'var(--tx)';
           const fechaStr=`${p.fecha.getDate()} ${mn2[p.fecha.getMonth()]} ${p.fecha.getFullYear()}`;
           const empDisp=ELP[p.emp]||p.emp||'—';
-          return `<tr style="border-bottom:1px solid var(--line)">
-            <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.num}</td>
+          const open=pendPedidoExpandido.has(p.num);
+          return `<tr data-pedido-num="${p.num}" style="cursor:pointer;border-bottom:1px solid var(--line)${open?';background:rgba(96,165,250,.08)':''}">
+            <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${p.num}</td>
             <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.rso||'—'}</td>
             <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${fechaStr}</td>
             <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${diaCol}">${p.dias}</td>
             <td style="padding:5px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.rubro||'—'}</td>
             <td style="padding:5px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${empDisp}</td>
             <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.total)}</td>
-          </tr>`;
+          </tr>${_pedidoLineasHtml(p.num,7)}`;
         }).join('')}</tbody>
       </table>
     </div>
   </div>`;
+  _wirePedidoRowClicks(wrap);
   wrap.querySelectorAll('th[data-col]').forEach(th=>{
     th.onclick=()=>{
       const col=th.dataset.col;
       if(pendSortCol===col){ pendSortDir=pendSortDir==='asc'?'desc':'asc'; }
       else { pendSortCol=col; pendSortDir='desc'; }
+      renderPendientesDetalle();
+    };
+  });
+}
+
+// Tabla de detalle de la tarjeta "Baja utilidad" (pedido 10/09/2026) — pedidos pendientes con
+// rentabilidad menor a 50%, agregada por pedido (ver calcPendientesFiltered: venta=suma de
+// TOTAL de sus líneas, costo=suma de COSTO×CANTIDAD, utilidad=venta-costo, pctUtil=utilidad/
+// venta×100). Columnas propias, pedidas explícitamente por el usuario: N° PEDIDO, CLIENTE,
+// FECHA, DÍAS, EMPRESA, COSTO, VENTA, UTILIDAD, IMPORTE (venta e importe son el mismo total
+// del pedido — confirmado con el usuario, se repite por consistencia con las otras 3
+// tarjetas, que ya usan "IMPORTE" para ese mismo campo). 3 bandas de color por fila, todas
+// dentro del universo <50% que ya filtra la tarjeta: 50%→35% naranja, 35%→20% rojo claro,
+// <20% (incluye 0 y negativos) rojo oscuro — confirmado con el usuario por multiple choice.
+function _bandaUtilColor(pct){
+  if(pct<20) return '#dc2626';   // rojo oscuro
+  if(pct<35) return '#f87171';  // rojo claro (mismo rojo "estándar" ya usado en el resto del tablero)
+  return '#fb923c';             // naranja (35%–50%, mismo naranja ya usado en la paleta/gauges)
+}
+function renderBajaUtilidadDetalle(wrap){
+  const rows0=PEND_LIST.filter(p=>p.pctUtil<50);
+  if(!rows0.length){ wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--mut)">Sin pedidos con rentabilidad menor a 50%.</div>`; return; }
+  const ELP={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
+  const sorters={
+    num:(a,b)=>String(a.num).localeCompare(String(b.num),'es'),
+    rso:(a,b)=>String(a.rso||'').localeCompare(String(b.rso||''),'es'),
+    fecha:(a,b)=>a.fecha-b.fecha,
+    dias:(a,b)=>a.dias-b.dias,
+    emp:(a,b)=>String(ELP[a.emp]||a.emp||'').localeCompare(String(ELP[b.emp]||b.emp||''),'es'),
+    costo:(a,b)=>a.costo-b.costo,
+    venta:(a,b)=>a.total-b.total,
+    utilidad:(a,b)=>a.utilidad-b.utilidad,
+    pctUtil:(a,b)=>a.pctUtil-b.pctUtil
+  };
+  sorters.importe=sorters.venta; // IMPORTE es el mismo campo que VENTA (ver comentario arriba), mismo criterio de orden con su propio <th> resaltado
+  const cmp=sorters[pendUtilSortCol]||sorters.pctUtil;
+  const rows=rows0.slice().sort((a,b)=>pendUtilSortDir==='asc'?cmp(a,b):-cmp(a,b));
+  const fmtV=v=>Math.round(v).toLocaleString('es-AR');
+  const mn2=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const arrow=col=>pendUtilSortCol===col?(pendUtilSortDir==='asc'?' ▲':' ▼'):'';
+  const thCol=col=>pendUtilSortCol===col?'var(--acc)':'var(--tx)';
+  const cols=[
+    {key:'num',      label:'N° PEDIDO', w:'11%', align:'left'},
+    {key:'rso',      label:'CLIENTE',   w:'18%', align:'left'},
+    {key:'fecha',    label:'FECHA',     w:'10%', align:'center'},
+    {key:'dias',     label:'DÍAS',      w:'7%',  align:'center'},
+    {key:'emp',      label:'EMPRESA',   w:'9%',  align:'center'},
+    {key:'costo',    label:'COSTO',     w:'13%', align:'right'},
+    {key:'venta',    label:'VENTA',     w:'13%', align:'right'},
+    {key:'utilidad', label:'UTILIDAD',  w:'10%', align:'right'},
+    {key:'importe',  label:'IMPORTE',   w:'9%',  align:'right'}
+  ];
+  wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Pedidos con baja utilidad · rentabilidad &lt;50% · ${rows.length.toLocaleString('es-AR')} pedidos</div>
+    <div>
+      <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+        <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
+        <thead><tr style="border-bottom:1px solid var(--line2)">
+          ${cols.map(c=>`<th data-utilcol="${c.key}" style="padding:5px 8px;text-align:${c.align};font-weight:600;cursor:pointer;user-select:none;color:${thCol(c.key)}">${c.label}${arrow(c.key)}</th>`).join('')}
+        </tr></thead>
+        <tbody>${rows.map(p=>{
+          const bandaCol=_bandaUtilColor(p.pctUtil);
+          const diaCol=p.dias>45?'#f87171':'var(--tx)';
+          const fechaStr=`${p.fecha.getDate()} ${mn2[p.fecha.getMonth()]} ${p.fecha.getFullYear()}`;
+          const empDisp=ELP[p.emp]||p.emp||'—';
+          const open=pendPedidoExpandido.has(p.num);
+          return `<tr data-pedido-num="${p.num}" style="cursor:pointer;border-bottom:1px solid var(--line)${open?';background:rgba(96,165,250,.08)':''}">
+            <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${p.num}</td>
+            <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.rso||'—'}</td>
+            <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${fechaStr}</td>
+            <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${diaCol}">${p.dias}</td>
+            <td style="padding:5px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${empDisp}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.costo)}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.total)}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:${bandaCol}">${p.pctUtil.toFixed(0)}%</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.total)}</td>
+          </tr>${_pedidoLineasHtml(p.num,9)}`;
+        }).join('')}</tbody>
+      </table>
+    </div>
+  </div>`;
+  _wirePedidoRowClicks(wrap);
+  wrap.querySelectorAll('th[data-utilcol]').forEach(th=>{
+    th.onclick=()=>{
+      const col=th.dataset.utilcol;
+      if(pendUtilSortCol===col){ pendUtilSortDir=pendUtilSortDir==='asc'?'desc':'asc'; }
+      else { pendUtilSortCol=col; pendUtilSortDir=col==='pctUtil'?'asc':'desc'; }
       renderPendientesDetalle();
     };
   });
@@ -1973,10 +2143,17 @@ function calcPendientesFiltered(){
   }
   // group by NUMERO PEDIDO
   const peds={};
+  const linesByNum={};
   for(const r of filtered){
     const num=String(r['NUMERO PEDIDO']||'').trim();
     if(!num)continue;
     const total=_n(r['TOTAL']);
+    // Costo de la línea (pedido 10/09/2026, tarjeta "Baja utilidad"): la solapa PEDIDOS
+    // PENDIENTES trae COSTO y PRECIO como valores UNITARIOS (confirmado con el usuario:
+    // columna W=COSTO, X=PRECIO, Y=RENTABILIDAD, Z=TOTAL; TOTAL=PRECIO×CANTIDAD, verificado
+    // contra los datos reales del sheet) — así que el costo TOTAL de la línea es
+    // COSTO×CANTIDAD, igual criterio que ya usa TOTAL (=PRECIO×CANTIDAD) para la venta.
+    const costoLinea=_n(r['COSTO'])*_n(r['CANTIDAD']);
     const fs=String(r['FECHA PEDIDO']||'').trim();
     let fd=null;
     const iso=fs.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -1985,7 +2162,7 @@ function calcPendientesFiltered(){
     if(!fd||isNaN(fd))continue;
     if(!peds[num]){
       peds[num]={
-        fecha:fd,total:0,
+        fecha:fd,total:0,costo:0,
         rso:String(r['RSO']||'').trim(),
         rubro:String(r['RUBRO']||'OTROS').trim(),
         emp:String(r['EMPRESA PEDIDO']||'').trim(),
@@ -1993,16 +2170,39 @@ function calcPendientesFiltered(){
       };
     }
     peds[num].total+=total;
+    peds[num].costo+=costoLinea;
+    // Detalle de producto de esta línea (pedido 10/09/2026) — se guarda tal cual, una entrada
+    // por línea del sheet (mismo criterio de "sin dedup" que ya usa esta función para total/
+    // costo del pedido, ya que cada línea de PEDIDOS PENDIENTES es un producto real distinto).
+    if(!linesByNum[num])linesByNum[num]=[];
+    linesByNum[num].push({
+      codigo:String(r['PRO CODIGO']||'').trim(),
+      producto:String(r['PRODUCTO']||'').trim(),
+      cantidad:_n(r['CANTIDAD']),
+      costo:_n(r['COSTO']),
+      precio:_n(r['PRECIO']),
+      total,
+      rentabilidad:_n(r['RENTABILIDAD'])
+    });
   }
-  let cntOk=0,vtaOk=0,cntAl=0,vtaAl=0;
+  PEND_LINES_BY_NUM=linesByNum;
+  let cntOk=0,vtaOk=0,cntAl=0,vtaAl=0,cntBajaUtil=0,vtaBajaUtil=0;
   PEND_LIST=[];
   for(const k in peds){
     const p=peds[k];
     const dias=Math.floor((today-p.fecha)/86400000);
-    PEND_LIST.push({num:k,fecha:p.fecha,dias,rso:p.rso,rubro:p.rubro,emp:p.emp,total:p.total,vendedor:p.vendedor});
+    // Utilidad del pedido (pedido 10/09/2026): venta=p.total (mismo campo que ya usan las
+    // otras 3 tarjetas como IMPORTE), costo=p.costo (nuevo), utilidad=venta-costo. Si la venta
+    // es 0 o negativa (ej: pedido íntegramente de líneas con cantidad negativa/devolución) no
+    // hay un % de utilidad que tenga sentido calcular — se deja en 0, lo que lo manda directo
+    // a la banda más grave (<20%) en vez de romper el cálculo con Infinity/NaN.
+    const utilidad=p.total-p.costo;
+    const pctUtil=p.total>0?(utilidad/p.total*100):0;
+    PEND_LIST.push({num:k,fecha:p.fecha,dias,rso:p.rso,rubro:p.rubro,emp:p.emp,total:p.total,vendedor:p.vendedor,costo:p.costo,utilidad,pctUtil});
     if(dias<=45){cntOk++;vtaOk+=p.total;}else{cntAl++;vtaAl+=p.total;}
+    if(pctUtil<50){cntBajaUtil++;vtaBajaUtil+=p.total;}
   }
-  PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,tot:cntOk+cntAl};
+  PEND_DATA={cntOk,vtaOk,cntAl,vtaAl,cntBajaUtil,vtaBajaUtil,tot:cntOk+cntAl};
   renderPendientes();
   renderGauges();
   renderGaugesDiario();
@@ -4701,3 +4901,17 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 149 - Dashboard ventas REM 2026 - multi-seleccion en detalle Venta activa sin NDCs: el usuario pidió (10/09/2026) que, en la tabla desplegable de la 2da tarjeta KPI ("Venta activa · sin NDCs", data-card="ventaSinNdc" — la que tiene los 4 switches "Vista diaria"/"Vista clientes"/"Sin tránsito"/"Solo tránsito"), se pueda desplegar MÁS DE una fecha/cliente/mes a la vez, sin importar cuál de los switches esté activo en ese momento — hasta este archivo, cada uno de los 3 tipos de fila expandible de esa tabla ("uno solo a la vez", mismo patrón usado en el resto del tablero) se cerraba automáticamente al abrir otro. Antes de tocar código se confirmó, leyendo el código real (archivos 131/132/146), que el pedido aplica a exactamente 3 variables de estado, todas propias de ESTA tarjeta en particular: kpiDiaVtaActivo (día expandido en "Vista diaria"), kpiClienteTransitoActivo (cliente expandido en "Vista clientes", con el detalle "Mes actual/Acumulado meses anteriores") y kpiMesTransitoActivo (mes expandido en "Solo tránsito") — el switch "Sin tránsito" en sí no tiene fila propia, sólo recalcula los datos de las otras 2 vistas, así que no necesita ningún cambio. No se tocó la 1ra tarjeta KPI ("Venta activa · con NDCs"), que sólo tiene 2 switches (sin "Sin tránsito"/"Solo tránsito") y no fue parte del pedido. Implementación: las 3 variables, que eran un valor único (`let x=null`, comparado con `===` y reasignado con el patrón `x=(x===k)?null:k`), pasan a ser Sets (`const x=new Set()`), exactamente el mismo patrón que ya usa estDiaClienteExpandido en la sección "Estado de remito" del propio tablero (comprobación con `.has(key)`, alternancia con `if(x.has(k))x.delete(k);else x.add(k)`) — no se inventó ningún mecanismo nuevo, se extendió uno que el código ya tenía probado en otro lugar. Cambios puntuales: (1) las 2 declaraciones de kpiDiaVtaActivo/kpiClienteTransitoActivo y la de kpiMesTransitoActivo pasan a kpiDiaVtaActivas/kpiClienteTransitoActivas/kpiMesTransitoActivas (Sets); (2) en _filaDiaHtml() y _filaMesTransitoHtml(), el cálculo de "open" de cada fila pasa de comparación (`===key`) a `.has(key)`; (3) en renderVentaSinNdcMensualBody(), el cálculo de "open" de cada cliente pasa a `.has(c.cliente)`; (4) los 3 listeners de clic (tr[data-daykey], tr[data-mestransito], tr[data-cli-transito]) pasan de reasignar la variable a alternar la clave dentro del Set correspondiente. Ningún cálculo de $ ni de agrupación se tocó (computeVentaSinNdcDiario/computeVentaSinNdcMensual/computeVentaSoloTransito, _totEstadoRow, etc. quedan intactos) — el cambio es puramente de qué filas se muestran expandidas a la vez, no de qué datos contiene cada fila. Se mantiene el mismo criterio ya documentado de estas 3 variables: persisten aunque se cierre/reabra la tarjeta o se cambie de switch (ningún switch limpia estos Sets). Verificado con `node --check` sobre el bloque <script> completo, `diff` contra el archivo 148 (confirma que sólo cambiaron las 3 declaraciones + las 6 líneas de uso, sin tocar ninguna otra función), y un test aislado en Node que simula clics reales sobre los 3 Sets: confirma que se pueden abrir 3 días distintos en Vista diaria a la vez (los 3 quedan con open=true), que un clic en un día ya abierto lo cierra sin afectar a los otros 2, y que Vista clientes y Solo tránsito se comportan igual y de forma independiente entre sí (abrir clientes no afecta los días abiertos, ni viceversa). Pedido 10/09/2026. -->
 <!-- - breve descripcion de lo hecho: en la tabla desplegable de "Venta activa · sin NDCs" ahora se pueden tener varias fechas, clientes o meses expandidos al mismo tiempo (antes, al abrir uno se cerraba el que estaba abierto antes) — funciona igual en Vista diaria, Vista clientes y Solo tránsito, sin ninguna restricción de cantidad. -->
+
+<!-- 150 - Dashboard ventas REM 2026 - tarjeta baja utilidad en pedidos pendientes: el usuario pidió (10/09/2026) agregar una 4ta tarjeta a "Pedidos pendientes de facturar" (que ya tenía 3: "Pedidos pendientes" <45 días, "Pendientes Activos" total, "Vencidos +45 días"), en rojo como la de vencidos, para pedidos con BAJA UTILIDAD, con un listado desplegable de columnas: N° de pedido, cliente, fecha del pedido, días que lleva cargado, empresa, costo, venta, utilidad e importe. Antes de tocar código se resolvieron 2 bloqueos reales por multiple choice: (1) de dónde salen COSTO/VENTA, ya que el sheet PEDIDOS PENDIENTES (gid=1646279255) hasta ahora solo se leía por NUMERO PEDIDO/TOTAL/FECHA PEDIDO/RSO/RUBRO/EMPRESA PEDIDO/VENDEDOR, sin ningún campo de costo — el usuario confirmó que la solapa YA tiene columna W=COSTO, X=PRECIO, Y=RENTABILIDAD, Z=TOTAL (verificado en vivo contra el sheet real vía gviz: son valores UNITARIOS por línea de producto, TOTAL=PRECIO×CANTIDAD, confirmado con los datos reales: ej. costo 12.809,16 × cantidad 10 = no es TOTAL, pero precio 20.215,17×10=202.151,70=TOTAL de esa línea); (2) el umbral de "baja utilidad": el usuario definió 3 bandas de color a partir de la rentabilidad de cada pedido — naranja de 50% a 35%, rojo claro de 35% a 20%, rojo oscuro por debajo de 20% (cero o negativo) — es decir, la tarjeta agrupa TODO pedido con rentabilidad <50%, coloreando cada fila del listado según en cuál de esas 3 bandas cae. Implementación: (1) calcPendientesFiltered() ahora también acumula, por cada línea de producto, costoLinea=COSTO×CANTIDAD (mismo criterio que ya usaba TOTAL=PRECIO×CANTIDAD para la venta) sumado a un nuevo campo p.costo por pedido; al armar PEND_LIST se calcula utilidad=venta-costo y pctUtil=utilidad/venta×100 (si venta<=0, pctUtil=0, para no romper el cálculo con Infinity/NaN — cae directo a la banda más grave). PEND_DATA suma cntBajaUtil/vtaBajaUtil (pedidos y $ con pctUtil<50) junto a los contadores ya existentes. (2) Se agregó la 4ta tarjeta (data-card="bajaUtilidad", clase pend-alert como "vencidos", mismo rojo) al HTML de #pendientesKpis (grid de 3→4 columnas) y a renderPendientes() — reutiliza el mismo mecanismo genérico de clic/togglePendDetalle que ya tenían las otras 3 tarjetas, sin tocarlo. (3) Como esta tarjeta necesita columnas totalmente distintas (COSTO/VENTA/UTILIDAD/IMPORTE en vez de RUBRO), se armó una función de render propia (renderBajaUtilidadDetalle, con su propia función _bandaUtilColor para las 3 bandas de color) en vez de sumarle ramas a la tabla compartida de las otras 3 tarjetas — tiene su propio estado de orden (pendUtilSortCol/pendUtilSortDir, no comparte con pendSortCol/pendSortDir) porque no comparten columnas en común más que num/cliente/fecha/días/empresa. VENTA e IMPORTE muestran el mismo campo (confirmado con el usuario: es el mismo total del pedido) pero con su propio <th> y key de orden ("venta"/"importe", mismo comparador) para que cada uno resalte por separado al ordenar. Ningún cálculo de las otras 3 tarjetas (cntOk/vtaOk/cntAl/vtaAl, PEND_LIST.total, etc.) se tocó ni se vio afectado. Verificado con `node --check` sobre el bloque <script> completo, `diff` contra el archivo 149 (confirma que los cambios son puramente aditivos: nuevo estado, nueva rama de render, nueva función, más las 2 líneas de acumulación de costo — nada de lo existente se modificó), y un test aislado en Node con 4 pedidos de muestra (uno de cada banda + uno por encima de 50% que NO debe entrar) que reproduce exactamente la agregación por NUMERO PEDIDO con líneas múltiples: confirma que un pedido con 66.7% de utilidad queda afuera de la tarjeta, que uno con 30% cae en "rojo claro", uno con -50% (venta menor al costo) en "rojo oscuro", uno con 40% en "naranja", y que la suma de $ de "baja utilidad" es exactamente la suma de los 3 pedidos que sí califican. Pedido 10/09/2026. -->
+<!-- - breve descripcion de lo hecho: se agregó una 4ta tarjeta roja "Baja utilidad" a "Pedidos pendientes de facturar", para los pedidos con rentabilidad menor a 50% (mismo mecanismo de clic para desplegar que las otras 3). El listado que se despliega muestra N° de pedido, cliente, fecha, días cargado, empresa, costo, venta, utilidad e importe, con cada fila coloreada según su rentabilidad: naranja de 50% a 35%, rojo claro de 35% a 20%, y rojo oscuro por debajo de 20% (incluye negativos). Costo y venta salen de las columnas COSTO/PRECIO/CANTIDAD que ya tenía el sheet de Pedidos Pendientes, agregadas por pedido igual que ya se hacía con el total. -->
+
+<!-- 151 - Dashboard ventas REM 2026 - columna utilidad solo porcentaje: el usuario pidió (10/09/2026) que la columna UTILIDAD de la tabla de "Baja utilidad" (archivo 150) muestre solamente el porcentaje, no el importe en $ seguido del %. Cambio puntual de una sola línea en renderBajaUtilidadDetalle(): la celda pasa de `$${fmtV(p.utilidad)} <span...>(${p.pctUtil.toFixed(0)}%)</span>` a `${p.pctUtil.toFixed(0)}%` — se mantiene el color por banda (naranja/rojo claro/rojo oscuro, sin cambios en _bandaUtilColor) y el criterio de orden de esa columna (sorters.utilidad sigue ordenando por el importe real de utilidad, no por el %, sin cambios — sólo cambió lo que se MUESTRA en la celda, no el dato subyacente ni cómo se ordena). El importe de utilidad en $ sigue disponible igual que antes restando VENTA − COSTO de esa misma fila, por si se lo necesita. Verificado con `node --check` y `diff` contra el archivo 150 (confirma que es la única línea modificada en todo el archivo). Pedido 10/09/2026. -->
+<!-- - breve descripcion de lo hecho: la columna UTILIDAD de la tarjeta "Baja utilidad" ahora muestra solamente el porcentaje (ej: "30%"), sin el importe en $ que aparecía antes al lado. -->
+
+<!-- 152 - Dashboard ventas REM 2026 - sin scroll interno en pedidos pendientes: el usuario pidió (10/09/2026) que, al hacer clic en cualquiera de las 4 tarjetas de "Pedidos pendientes de facturar" (Pedidos pendientes <45 días, Pendientes Activos, Vencidos +45 días, Baja utilidad), el listado desplegado no corte con scroll interno sino que se vea completo, creciendo la página en vez de tener que scrollear dentro de una caja. Se quitó `style="max-height:340px;overflow-y:auto"` del `<div>` que envuelve la tabla en las 2 funciones de esta sección: renderPendientesDetalle() (usada por las primeras 3 tarjetas: ok/vencidos/todos, ya que comparten la misma tabla) y renderBajaUtilidadDetalle() (la 4ta tarjeta, agregada en el archivo 150) — mismo criterio ya aplicado en otra sección del tablero (archivo 125, "Estado de remito": ahí también se sacó el mismo estilo por el mismo motivo). No se tocaron los otros 3 lugares del archivo que usan textualmente el mismo `max-height:340px;overflow-y:auto` (el listado de "Clientes únicos"/"Clientes nuevos" dentro de renderKpiDetalle, la "Lista detalle" de NDC dentro de renderNdcDetalle, y "Utilidad negativa de clientes por familias de productos" dentro de renderUtilidadNegativaFamilias) — el usuario pidió esto específicamente para la sección de pedidos pendientes, esas otras 3 tablas no fueron mencionadas y siguen con su scroll interno de siempre. Verificado con `node --check` y `diff` contra el archivo 151 (confirma que sólo se modificaron esas 2 líneas exactas, ninguna otra ocurrencia del mismo estilo en el archivo). Pedido 10/09/2026. -->
+<!-- - breve descripcion de lo hecho: al desplegar cualquiera de las 4 tarjetas de "Pedidos pendientes de facturar", el listado ahora se ve completo sin necesidad de scrollear dentro de una caja (la página crece en su lugar). Sólo afecta a esta sección; el resto de las listas desplegables del tablero (Clientes únicos/nuevos, NDC, Utilidad negativa por familias) siguen igual que antes. -->
+
+<!-- 153 - Dashboard ventas REM 2026 - detalle de productos por pedido pendiente: el usuario pidió (10/09/2026) que, además de desplegar el listado de pedidos al hacer clic en cualquiera de las 4 tarjetas de "Pedidos pendientes de facturar", se pueda hacer clic en una FILA puntual (un número de pedido) para ver los productos que la componen, para poder analizar el detalle línea por línea. Implementación: (1) calcPendientesFiltered() ahora arma, en el mismo bucle donde ya agrupa por NUMERO PEDIDO (respetando rubFilter), una estructura nueva PEND_LINES_BY_NUM = { numeroPedido: [líneas] } con una entrada por cada línea de producto real del sheet PEDIDOS PENDIENTES (PRO CODIGO, PRODUCTO, CANTIDAD, COSTO y PRECIO unitarios, TOTAL de esa línea, RENTABILIDAD de esa línea) — al usar el mismo filtro que ya arma PEND_LIST, el detalle de un pedido siempre suma exactamente lo mismo que su fila agregada (verificado en el test). (2) 2 funciones nuevas y compartidas entre las 4 tarjetas: _pedidoLineasHtml(num,colspan) arma una fila `<tr>` con una tabla anidada de productos (ordenados de mayor a menor importe de línea) si ese pedido está en el Set pendPedidoExpandido, o el mensaje "Sin productos para este pedido" si por algún motivo no hay líneas cargadas; _wirePedidoRowClicks(wrap) engancha el clic de cualquier `tr[data-pedido-num]` para togglear esa clave en el Set y volver a renderizar. Se usa un Set (pendPedidoExpandido), no "uno solo a la vez", siguiendo el mismo criterio ya usado en remExpanded/pendComExpanded/kpiDiaVtaActivas de este tablero — se pueden tener varios pedidos con su detalle de productos abierto a la vez para compararlos. (3) renderPendientesDetalle() (tarjetas ok/vencidos/todos) y renderBajaUtilidadDetalle() (tarjeta bajaUtilidad) ganaron cada una: cursor:pointer + atributo data-pedido-num en su `<tr>` de pedido, un indicador ▸/▾ antes del N° de pedido, el llamado a _pedidoLineasHtml(p.num, 7 o 9 según la tabla) justo después de cada fila, y el llamado a _wirePedidoRowClicks(wrap) luego de fijar wrap.innerHTML — mismo mecanismo en las 2 tablas pese a tener columnas distintas, sin duplicar código. Sin cambios en ningún cálculo existente (PEND_LIST, PEND_DATA, cntOk/vtaOk/etc., utilidad/pctUtil de la tarjeta 4) — el pedido de esta versión es puramente de navegación/visualización, no toca ningún número ya mostrado. Verificado con `node --check`, `diff` contra el archivo 152 (confirma que los cambios son aditivos: 2 funciones nuevas, la estructura PEND_LINES_BY_NUM y su Set, más las líneas de wiring/atributos en las 2 tablas existentes — nada de lo anterior se modificó), y 2 tests aislados en Node: uno simulando clics reales sobre pendPedidoExpandido (confirma que arranca colapsado, que un clic lo expande mostrando sus productos ordenados por importe descendente, que se pueden expandir 2 pedidos a la vez sin que uno cierre al otro, que un pedido sin líneas muestra el mensaje correspondiente, y que un segundo clic lo cierra sin afectar al otro pedido abierto); y otro que arma PEND_LINES_BY_NUM con 2 líneas de un mismo pedido y confirma que la suma de TOTAL y de COSTO×CANTIDAD de esas líneas coincide EXACTAMENTE con el total/costo agregado de ese pedido en PEND_LIST. Pedido 10/09/2026. -->
+<!-- - breve descripcion de lo hecho: ahora se puede hacer clic en cualquier fila de pedido (en las 4 tarjetas de "Pedidos pendientes de facturar") para desplegar los productos que lo componen (código, producto, cantidad, costo, precio, total y rentabilidad de cada línea), sin cerrar el resto de la lista. Se pueden tener varios pedidos con su detalle de productos abierto al mismo tiempo para comparar. -->
+
+

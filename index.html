@@ -1819,20 +1819,22 @@ let PEND_LIST=[]; // pedidos únicos filtrados: {num,fecha,dias,rso,rubro,emp,to
 let PEND_LINES_BY_NUM={}; // { numeroPedido: [{codigo,producto,cantidad,costo,precio,total,rentabilidad}, ...] }
 // Set (no "uno solo a la vez"): se puede tener el detalle de varios pedidos desplegado al
 // mismo tiempo para compararlos, mismo criterio ya usado en remExpanded/pendComExpanded más
-// abajo. Compartido entre las 4 tarjetas (un NUMERO PEDIDO es único en todo el universo de
-// pendientes, no hay ambigüedad si aparece expandido en más de una).
+// abajo. Compartido entre las 3 tarjetas "ok/vencidos/todos" (un NUMERO PEDIDO es único en
+// todo el universo de pendientes, no hay ambigüedad si aparece expandido en más de una).
+// AJUSTE 15/09/2026: la tarjeta "Baja utilidad" dejó de usar este mecanismo de expandir/
+// colapsar -- ver comentario en renderBajaUtilidadDetalle() más abajo.
 const pendPedidoExpandido=new Set();
 let pendActiveCard=null; // 'ok' | 'vencidos' | 'todos' | 'bajaUtilidad' | null
 let pendSortCol='total'; // columna activa de orden
 let pendSortDir='desc'; // 'asc' | 'desc'
 // Tarjeta "Baja utilidad" (pedido 10/09/2026): 4ta tarjeta de "Pedidos pendientes de
-// facturar", en rojo como "Vencidos +45 días", pero para pedidos con rentabilidad <50%
-// (agregada por pedido: VENTA=suma de TOTAL de sus líneas, COSTO=suma de COSTO×CANTIDAD de
-// sus líneas — columnas W/S de la solapa PEDIDOS PENDIENTES —, UTILIDAD=VENTA-COSTO, %util=
-// UTILIDAD/VENTA×100). Tabla de detalle propia (columnas distintas a las otras 3 tarjetas:
-// N° PEDIDO/CLIENTE/FECHA/DÍAS/EMPRESA/COSTO/VENTA/UTILIDAD/IMPORTE), por eso usa su propio
-// estado de orden en vez de compartir pendSortCol/pendSortDir (esas 2 tablas no comparten
-// ninguna columna en común salvo num/rso/fecha/dias/emp).
+// facturar", en rojo como "Vencidos +45 días". El criterio de ENTRADA a la tarjeta sigue
+// siendo por PEDIDO (ver bajaUtil en calcPendientesFiltered: entra si CUALQUIER línea suya
+// está bajo su mínimo de utilidad), pero desde el 15/09/2026 la tabla de detalle ya NO
+// muestra una fila por pedido -- ver renderBajaUtilidadDetalle() más abajo para el rediseño.
+// Columnas actuales: CLIENTE/PRODUCTO/N° PEDIDO/DÍAS/EMPRESA/COSTO/VENTA/UTILIDAD (FECHA e
+// IMPORTE se sacaron a pedido del usuario). Usa su propio estado de orden en vez de compartir
+// pendSortCol/pendSortDir porque no comparte columnas con la tabla de las otras 3 tarjetas.
 let pendUtilSortCol='pctUtil'; // columna activa de orden de la tabla de "Baja utilidad"
 let pendUtilSortDir='asc'; // 'asc' | 'desc' — arranca ascendente (peor utilidad primero)
 let remSortCol='vta'; let remSortDir='desc'; // orden tabla "Remitos por comercial"
@@ -2083,90 +2085,97 @@ function renderPendientesDetalle(){
   });
 }
 
-// Tabla de detalle de la tarjeta "Baja utilidad" — pedidos pendientes con al menos UNA línea
-// de producto por debajo de su utilidad mínima (ver calcPendientesFiltered: venta=suma de
-// TOTAL de sus líneas, costo=suma de COSTO×CANTIDAD, utilidad=venta-costo, pctUtil=utilidad/
-// venta×100 -- el % agregado del pedido; bajaUtil=si ALGUNA línea suya está bajo su propio
-// mínimo, ver utilMinDe()). Columnas propias, pedidas explícitamente por el usuario: N°
-// PEDIDO, CLIENTE, FECHA, DÍAS, EMPRESA, COSTO, VENTA, UTILIDAD, IMPORTE (venta e importe son
-// el mismo total del pedido — confirmado con el usuario, se repite por consistencia con las
-// otras 3 tarjetas, que ya usan "IMPORTE" para ese mismo campo). El umbral de ENTRADA a la
-// tarjeta usa el mínimo POR PRODUCTO (ver UTILMIN_POR_PRODUCTO/utilMinDe, archivo 154) y el
-// coloreado binario por LÍNEA del detalle de productos (_pedidoLineasHtml) sigue igual — eso
-// no cambió. AJUSTE 14/09/2026 (2do pedido del mismo día): el usuario pidió recuperar la
-// escala de 3 bandas de color en gradiente que esta columna UTILIDAD tenía antes del archivo
-// 154 (se había sacado por error de interpretación al simplificar a "cumple/no cumple"): se
-// vuelve a colorear el % AGREGADO del pedido en esta columna con _bandaUtilColor(pctUtil),
-// en paralelo al coloreado binario por línea del drill-down (conviven los 2: la columna
-// resumen usa el gradiente de siempre, cada línea del detalle usa el binario del archivo 154).
+// Tabla de detalle de la tarjeta "Baja utilidad" — REDISEÑO 15/09/2026: antes había una fila
+// por PEDIDO (PEND_LIST filtrado por bajaUtil) y para ver qué productos puntuales venían mal
+// vendidos había que hacer clic en la fila y desplegar _pedidoLineasHtml(); si un mismo
+// cliente tenía varios pedidos con baja utilidad, aparecían varias filas de pedido, cada una
+// requiriendo su propio clic para ver el detalle. El usuario pidió aplanar la tabla para no
+// tener que hacer clic renglón por renglón: ahora cada fila de esta tabla es directamente UNA
+// LÍNEA DE PRODUCTO por debajo de su mínimo de utilidad (mismo criterio de siempre:
+// l.rentabilidad<utilMinDe(l.codigo), ver utilMinDe()/UTILMIN_POR_PRODUCTO, archivo 154), con
+// el cliente, el número de pedido al que pertenece esa línea y los días de ESE pedido ya
+// visibles en la misma fila, sin necesidad de desplegar nada. Se quitaron las columnas FECHA e
+// IMPORTE (pedido explícito del usuario); COSTO y VENTA pasan a ser los de esa línea puntual
+// (costo=costo unitario×cantidad, venta=precio×cantidad=l.total), no la suma del pedido
+// completo como antes. La columna UTILIDAD sigue usando la escala de 3 bandas en gradiente de
+// _bandaUtilColor() (naranja 50–35%, rojo claro 35–20%, rojo oscuro <20%), ahora aplicada a la
+// rentabilidad de CADA línea en vez del % agregado del pedido, y el orden por defecto sigue
+// siendo ascendente por esa columna (peor utilidad primero). Un mismo cliente puede seguir
+// apareciendo en más de una fila si tiene varios productos y/o pedidos con baja utilidad —
+// eso es intencional, es lo que reemplaza al clic que antes hacía falta para verlos.
 function _bandaUtilColor(pct){
   if(pct<20) return '#dc2626';   // rojo oscuro
   if(pct<35) return '#f87171';  // rojo claro (mismo rojo "estándar" ya usado en el resto del tablero)
   return '#fb923c';             // naranja (35%–50%, mismo naranja ya usado en la paleta/gauges)
 }
 function renderBajaUtilidadDetalle(wrap){
-  const rows0=PEND_LIST.filter(p=>p.bajaUtil);
-  if(!rows0.length){ wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--mut)">Sin pedidos con líneas bajo el mínimo de utilidad.</div>`; return; }
+  const rowsPedido=PEND_LIST.filter(p=>p.bajaUtil);
+  let rows0=[];
+  for(const p of rowsPedido){
+    const lineas=(PEND_LINES_BY_NUM[p.num]||[]).filter(l=>l.rentabilidad<utilMinDe(l.codigo));
+    for(const l of lineas){
+      rows0.push({
+        rso:p.rso, producto:l.producto, codigo:l.codigo, num:p.num, dias:p.dias, emp:p.emp,
+        costo:l.costo*l.cantidad, venta:l.total, pct:l.rentabilidad, minPct:utilMinDe(l.codigo)
+      });
+    }
+  }
+  if(!rows0.length){ wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--mut)">Sin líneas de producto bajo el mínimo de utilidad.</div>`; return; }
   const ELP={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
   const sorters={
-    num:(a,b)=>String(a.num).localeCompare(String(b.num),'es'),
     rso:(a,b)=>String(a.rso||'').localeCompare(String(b.rso||''),'es'),
-    fecha:(a,b)=>a.fecha-b.fecha,
+    producto:(a,b)=>String(a.producto||'').localeCompare(String(b.producto||''),'es'),
+    num:(a,b)=>String(a.num).localeCompare(String(b.num),'es'),
     dias:(a,b)=>a.dias-b.dias,
     emp:(a,b)=>String(ELP[a.emp]||a.emp||'').localeCompare(String(ELP[b.emp]||b.emp||''),'es'),
     costo:(a,b)=>a.costo-b.costo,
-    venta:(a,b)=>a.total-b.total,
-    utilidad:(a,b)=>a.utilidad-b.utilidad,
-    pctUtil:(a,b)=>a.pctUtil-b.pctUtil
+    venta:(a,b)=>a.venta-b.venta,
+    pctUtil:(a,b)=>a.pct-b.pct,
+    minPct:(a,b)=>a.minPct-b.minPct
   };
-  sorters.importe=sorters.venta; // IMPORTE es el mismo campo que VENTA (ver comentario arriba), mismo criterio de orden con su propio <th> resaltado
   const cmp=sorters[pendUtilSortCol]||sorters.pctUtil;
   const rows=rows0.slice().sort((a,b)=>pendUtilSortDir==='asc'?cmp(a,b):-cmp(a,b));
   const fmtV=v=>Math.round(v).toLocaleString('es-AR');
-  const mn2=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const arrow=col=>pendUtilSortCol===col?(pendUtilSortDir==='asc'?' ▲':' ▼'):'';
   const thCol=col=>pendUtilSortCol===col?'var(--acc)':'var(--tx)';
   const cols=[
-    {key:'num',      label:'N° PEDIDO', w:'11%', align:'left'},
-    {key:'rso',      label:'CLIENTE',   w:'18%', align:'left'},
-    {key:'fecha',    label:'FECHA',     w:'10%', align:'center'},
-    {key:'dias',     label:'DÍAS',      w:'7%',  align:'center'},
-    {key:'emp',      label:'EMPRESA',   w:'9%',  align:'center'},
-    {key:'costo',    label:'COSTO',     w:'13%', align:'right'},
-    {key:'venta',    label:'VENTA',     w:'13%', align:'right'},
-    {key:'utilidad', label:'UTILIDAD',  w:'10%', align:'right'},
-    {key:'importe',  label:'IMPORTE',   w:'9%',  align:'right'}
+    {key:'rso',      label:'CLIENTE',      w:'14%', align:'left'},
+    {key:'producto', label:'PRODUCTO',     w:'27%', align:'left'},
+    {key:'num',      label:'N° PEDIDO',    w:'8%',  align:'left'},
+    {key:'dias',     label:'DÍAS',         w:'6%',  align:'center'},
+    {key:'emp',      label:'EMPRESA',      w:'7%',  align:'center'},
+    {key:'costo',    label:'COSTO',        w:'11%', align:'right'},
+    {key:'venta',    label:'VENTA',        w:'11%', align:'right'},
+    {key:'pctUtil',  label:'UTILIDAD',     w:'8%',  align:'right'},
+    {key:'minPct',   label:'MÍN. EXIGIDO', w:'8%',  align:'right'}
   ];
   wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
-    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Pedidos con baja utilidad · con líneas bajo el mínimo · ${rows.length.toLocaleString('es-AR')} pedidos</div>
+    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Líneas de producto bajo el mínimo de utilidad · ${rows.length.toLocaleString('es-AR')} líneas</div>
     <div>
       <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
         <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
         <thead><tr style="border-bottom:1px solid var(--line2)">
           ${cols.map(c=>`<th data-utilcol="${c.key}" style="padding:5px 8px;text-align:${c.align};font-weight:600;cursor:pointer;user-select:none;color:${thCol(c.key)}">${c.label}${arrow(c.key)}</th>`).join('')}
         </tr></thead>
-        <tbody>${rows.map(p=>{
-          const bandaCol=_bandaUtilColor(p.pctUtil);
-          const diaCol=p.dias>45?'#f87171':'var(--tx)';
-          const fechaStr=`${p.fecha.getDate()} ${mn2[p.fecha.getMonth()]} ${p.fecha.getFullYear()}`;
-          const empDisp=ELP[p.emp]||p.emp||'—';
-          const open=pendPedidoExpandido.has(p.num);
-          return `<tr data-pedido-num="${p.num}" style="cursor:pointer;border-bottom:1px solid var(--line)${open?';background:rgba(96,165,250,.08)':''}">
-            <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${p.num}</td>
-            <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.rso||'—'}</td>
-            <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${fechaStr}</td>
-            <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${diaCol}">${p.dias}</td>
+        <tbody>${rows.map(r=>{
+          const bandaCol=_bandaUtilColor(r.pct);
+          const diaCol=r.dias>45?'#f87171':'var(--tx)';
+          const empDisp=ELP[r.emp]||r.emp||'—';
+          return `<tr style="border-bottom:1px solid var(--line)">
+            <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.rso||'—'}</td>
+            <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="color:var(--mut2);font-family:'IBM Plex Mono',monospace;font-size:10px">${r.codigo||'—'}</span> ${r.producto||'—'}</td>
+            <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.num}</td>
+            <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${diaCol}">${r.dias}</td>
             <td style="padding:5px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${empDisp}</td>
-            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.costo)}</td>
-            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.total)}</td>
-            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:${bandaCol}">${p.pctUtil.toFixed(0)}%</td>
-            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.total)}</td>
-          </tr>${_pedidoLineasHtml(p.num,9,true)}`;
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(r.costo)}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(r.venta)}</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:${bandaCol}">${r.pct.toFixed(0)}%</td>
+            <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;color:var(--mut2)">${r.minPct}%</td>
+          </tr>`;
         }).join('')}</tbody>
       </table>
     </div>
   </div>`;
-  _wirePedidoRowClicks(wrap);
   wrap.querySelectorAll('th[data-utilcol]').forEach(th=>{
     th.onclick=()=>{
       const col=th.dataset.utilcol;

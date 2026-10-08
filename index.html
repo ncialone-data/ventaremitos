@@ -254,6 +254,23 @@ svg{display:block;width:100%;overflow:visible}
   background:linear-gradient(90deg,var(--teal),rgba(52,227,198,.25));opacity:.5}
 .tbl td .v{font-family:"IBM Plex Mono",monospace;position:relative}
 .rk{color:var(--mut2);font-family:"IBM Plex Mono",monospace;font-size:12px;width:22px}
+/* Cumplimiento por fábrica - MENSUAL: medidores/tarjetas clickeables que despliegan el detalle
+   por cliente (archivo 182). .gauge-clic.on marca la fábrica con el listado abierto. */
+.gauge-clic{cursor:pointer;border-radius:12px;transition:background .15s,box-shadow .15s}
+.gauge-clic:hover{background:rgba(127,127,127,.07)}
+.gauge-clic.on{box-shadow:inset 0 0 0 1.5px var(--acc);background:rgba(127,127,127,.07)}
+.gdet-wrap{margin-top:14px;border-top:1px solid var(--line);padding-top:14px}
+.gdet-scroll{overflow-x:auto}
+.gdet th{cursor:pointer;user-select:none}
+.gdet th:hover{color:var(--tx)}
+.gdet td.cl{max-width:340px}
+.gdet tr.gdet-cli{cursor:pointer}
+.gdet tr.gdet-cli:hover td{background:rgba(127,127,127,.07)}
+.gdet tr.gdet-cli.open td{background:rgba(127,127,127,.09)}
+.gdet tr.gdet-prod td{font-size:12px;color:var(--mut2);background:rgba(127,127,127,.04)}
+.gdet tr.gdet-prod td.cl{padding-left:28px}
+.gdet .gdet-chev{display:inline-block;width:14px;color:var(--mut2);font-size:10px}
+.gdet tr.gdet-tot td{font-weight:700;border-top:1px solid var(--line2);border-bottom:none}
 .matrix{overflow-x:auto}
 .mtbl{border-collapse:collapse;width:100%;min-width:540px}
 .mtbl th{font-size:11px;color:var(--mut2);font-weight:500;padding:6px 6px;text-align:center}
@@ -370,6 +387,19 @@ svg{display:block;width:100%;overflow:visible}
 <div id="kpiDetalleWrap"></div>
 
 <div class="card" style="margin-bottom:14px">
+  <div class="c-head" id="estadoDiarioHead" style="cursor:pointer;user-select:none">
+    <span class="c-title">Estado de remito</span>
+    <span style="display:flex;align-items:center;gap:12px">
+      <span class="c-note" id="estadoNote"></span>
+      <span id="estadoDiarioChevron" style="font-size:11px;color:var(--mut2);white-space:nowrap">▸ Detalle diario</span>
+    </span>
+  </div>
+  <div class="tipos" id="estados"></div>
+  <div id="estadoDetalle"></div>
+  <div id="estadoDiarioWrap" style="margin-top:16px"></div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
   <div class="c-head" style="margin-bottom:10px">
     <span class="c-title">Notas de Crédito / Débito</span>
     <span class="c-note" id="ndcNote">actualizá los datos para cargar</span>
@@ -421,18 +451,7 @@ svg{display:block;width:100%;overflow:visible}
     <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px" id="infoRow"></div>
-</div>
-
-<div class="card" style="margin-bottom:14px">
-  <div class="c-head" id="estadoDiarioHead" style="cursor:pointer;user-select:none">
-    <span class="c-title">Estado de remito</span>
-    <span style="display:flex;align-items:center;gap:12px">
-      <span class="c-note" id="estadoNote"></span>
-      <span id="estadoDiarioChevron" style="font-size:11px;color:var(--mut2);white-space:nowrap">▸ Detalle diario</span>
-    </span>
-  </div>
-  <div class="tipos" id="estados"></div>
-  <div id="estadoDiarioWrap" style="margin-top:16px"></div>
+  <div id="gaugesDetalle"></div>
 </div>
 
 <div class="grid">
@@ -777,7 +796,7 @@ function render(){
   const R=rows();
   // Venta activa (KPIs y gráficos de arriba): ya NO contempla Transito — pedido 29/07/2026.
   // Los gauges "Cumplimiento por fábrica" y "Seguimiento comerciales" siguen incluyendo Transito
-  // (se calculan aparte, con ORIG_AGG/EJEC_ROWS en processRawRows, sin tocar).
+  // (se calculan aparte, con ORIG_CLI_ROWS/EJEC_ROWS en processRawRows; desde el archivo 189 los gauges por fábrica usan el criterio de "Venta activa gerencia": Tránsito acumulado y sin NDC).
   const ACTIVOS=['Firmada','Ingresada','Reparto'];
   const Rfirm=R.filter(d=>ACTIVOS.includes(d.e));
   const totalVta=Rfirm.reduce((s,d)=>s+d.v,0);
@@ -881,7 +900,7 @@ function render(){
   // únicos, Clientes nuevos) son clickeables desde el pedido 19/08/2026: despliegan un
   // listado de cliente + importe de mayor a menor — ver kpiActiveCard/renderKpiDetalle().
   document.getElementById('kpis').innerHTML=
-    `<div class="kpi acc pend-clickable" data-card="ventaNdc"><div class="k-lbl">Venta activa</div>
+    `<div class="kpi acc pend-clickable" data-card="ventaNdc"><div class="k-lbl">Venta activa comercial</div>
       <div class="k-val full">${fmtFull(totalVtaNeto)}</div>
       <div class="k-sub">${empFilter||'todas las empresas'} · sin Tránsito · con NDCs</div></div>`+
     // Tarjeta nueva — pedido 19/08/2026: misma "venta activa" (sin Tránsito) pero SIN
@@ -891,16 +910,15 @@ function render(){
     // (totalVta del mes filtrado + TODO el Tránsito acumulado, sin importar su fecha — ver
     // comentario más arriba), y el subtítulo pasa de "sin Tránsito" a "incl. Tránsito
     // acumulado" para que no diga lo contrario de lo que el número ya muestra.
-    `<div class="kpi acc pend-clickable" data-card="ventaSinNdc"><div class="k-lbl">Venta activa</div>
+    `<div class="kpi acc pend-clickable" data-card="ventaSinNdc"><div class="k-lbl">Venta activa gerencia</div>
       <div class="k-val full">${fmtFull(totalVtaSinNdcConTransito)}</div>
       <div class="k-sub">${empFilter||'todas las empresas'} · incl. Tránsito acumulado · sin NDCs</div></div>`+
     objCard+momCard+
     `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
       <div class="k-val">${fmtPct(margenAvg)}</div>
       <div class="k-sub">$${fmtM(totalVtaNeto-totalCos)} neto</div></div>
-    <div class="kpi pend-clickable" data-card="cliUnicos"><div class="k-lbl">Clientes únicos</div>
-      <div class="k-val">${clientes.toLocaleString('es-AR')}</div>
-      <div class="k-sub">en remitos activos</div></div>
+    <div class="kpi pend-clickable" data-card="cliUnicos"><div class="k-lbl">Clientes activos</div>
+      <div class="k-val">${clientes.toLocaleString('es-AR')}</div></div>
     <div class="kpi pend-clickable" data-card="cliNuevos"><div class="k-lbl">Clientes nuevos</div>
       <div class="k-val" style="color:var(--teal)">${clientesNuevos!==null?clientesNuevos.toLocaleString('es-AR'):'—'}</div>
       <div class="k-sub">${clientesNuevos!==null?'sin historial previo':'seleccioná un mes'}</div></div>`;
@@ -953,6 +971,7 @@ function render(){
   renderMargen(rowsNoMes().filter(d=>ACTIVOS.includes(d.e)));
   renderEstados(R,R.reduce((s,d)=>s+d.v,0));
   renderEstadoDiario();
+  renderGauges();        // Cumplimiento por fábrica MENSUAL sigue mes/empresa/rubro filtrados (archivo 189)
   renderMix(R,totalVta);
   renderMatrix();
   if(PEND_RAW)calcPendientesFiltered();
@@ -1115,28 +1134,111 @@ function renderMargen(R){
 }
 
 function renderEstados(R,total){
+  // Alineado con la tarjeta "Venta activa gerencia" (archivo 187): Firmada + Ingresada + Reparto del
+  // período filtrado + TODO el Tránsito acumulado (de cualquier mes, ignora el filtro de mes pero
+  // respeta empresa/rubro). Anulada, Pagada u otros estados se muestran como información pero NO
+  // suman en el total ni en los porcentajes. El mes de cada remito sigue la regla FEC. ACT. / FECHA.
+  const ACT=['Firmada','Ingresada','Reparto','Transito'];
   const map={};
-  R.forEach(d=>map[d.e]=(map[d.e]||0)+d.v);
-  // Conteo por comprobantes únicos (no por filas agregadas)
+  R.forEach(d=>{ if(d.e!=='Transito') map[d.e]=(map[d.e]||0)+d.v; });
+  const transAcum=rowsNoMes().filter(d=>d.e==='Transito').reduce((a,d)=>a+d.v,0);
+  if(transAcum!==0||R.some(d=>d.e==='Transito')) map['Transito']=transAcum;
+  // Conteo por comprobantes únicos (no por filas agregadas); Tránsito sin filtro de mes
   const cnt={};
-  REMS_RAW.filter(d=>(!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter)&&(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp)))
+  REMS_RAW.filter(d=>(d.estado==='Transito'||!mesFilter||d.mes===mesFilter)&&(!empFilter||d.emp===empFilter)&&(!empGrupoFilter||(EMP_GRUPOS[empGrupoFilter]||[]).includes(d.emp)))
     .forEach(d=>cnt[d.estado]=(cnt[d.estado]||0)+1);
   const ORDER=['Firmada','Ingresada','Reparto','Transito','Anulada'];
-  const arr=Object.entries(map).sort((a,b)=>ORDER.indexOf(a[0])-ORDER.indexOf(b[0]));
-  document.getElementById('estadoNote').textContent=(mesFilter?MLBL[mesFilter]:'año completo')+(empGrupoFilter?' · '+empGrupoFilter:'')+(empFilter?' · '+empFilter:'')+(rubFilter?' · '+rubFilter:'');
-  document.getElementById('estados').innerHTML=arr.map(([estado,monto])=>{
+  const arr=Object.entries(map).sort((a,b)=>{
+    const ia=ORDER.indexOf(a[0]), ib=ORDER.indexOf(b[0]);
+    return (ia<0?99:ia)-(ib<0?99:ib);
+  });
+  const totAct=arr.filter(([e])=>ACT.includes(e)).reduce((s,[,m])=>s+m,0);
+  document.getElementById('estadoNote').textContent=(mesFilter?MLBL[mesFilter]:'año completo')+(empGrupoFilter?' · '+empGrupoFilter:'')+(empFilter?' · '+empFilter:'')+(rubFilter?' · '+rubFilter:'')+' · Tránsito acumulado';
+  const chips=arr.map(([estado,monto])=>{
     const col=ESTADO_COL[estado.trim()]||'#9d7bff';
-    const pct=(total?monto/total*100:0).toFixed(1);
+    const act=ACT.includes(estado);
+    const pct=(totAct?monto/totAct*100:0).toFixed(1);
     const n=cnt[estado]||0;
-    return `<div class="tipo-chip">
+    const sub=act
+      ? `${n.toLocaleString('es-AR')} remitos · ${pct}% de venta activa${estado==='Transito'?' · acumulado':''}`
+      : `${n.toLocaleString('es-AR')} remitos · no suma en venta activa`;
+    return `<div class="tipo-chip gauge-clic${estadoDetActivo===estado?' on':''}" data-est="${estado}" title="clic para ver el detalle por cliente"${act?'':' style="opacity:.6;border-style:dashed"'}>
       <div class="tipo-dot" style="background:${col};box-shadow:0 0 8px ${col}88"></div>
       <div class="tipo-info">
         <div class="tipo-name" style="color:${col}">${estado}</div>
         <div class="tipo-val">${fmtFull(monto)}</div>
-        <div class="tipo-sub">${n.toLocaleString('es-AR')} remitos · ${pct}% del total</div>
+        <div class="tipo-sub">${sub}</div>
       </div>
     </div>`;
   }).join('');
+  document.getElementById('estados').innerHTML=chips;
+  document.querySelectorAll('#estados [data-est]').forEach(el=>{
+    el.onclick=()=>{
+      estadoDetActivo=(estadoDetActivo===el.dataset.est)?null:el.dataset.est;
+      renderEstados(R,total);
+    };
+  });
+  if(estadoDetActivo&&!map.hasOwnProperty(estadoDetActivo))estadoDetActivo=null;
+  renderEstadoDetalle();
+}
+
+// Detalle por cliente de "Estado de remito" (archivo 184). Al hacer clic en la tarjeta de un
+// estado se lista, con los MISMOS filtros que las tarjetas (período, grupo de empresa, empresa
+// y rubro), el importe de ese estado por cliente. Los clientes se agrupan por razón social
+// (sin el código numérico de punto de venta). Columnas: CLIENTE, REMITOS (comprobantes únicos),
+// IMPORTE y % del estado; ordenables al clic en cada encabezado.
+function renderEstadoDetalle(){
+  const wrap=document.getElementById('estadoDetalle');
+  if(!wrap)return;
+  const est=estadoDetActivo;
+  if(!est){wrap.innerHTML='';return;}
+  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const grp=empGrupoFilter?(EMP_GRUPOS[empGrupoFilter]||[]):null;
+  const byCli={};
+  for(const r of ESTCLI_ROWS){
+    if(r.estado!==est)continue;
+    if(mesFilter&&r.mes!==mesFilter&&est!=='Transito')continue; // Tránsito: acumulado (archivo 187)
+    if(grp&&!grp.includes(r.emp))continue;
+    if(empFilter&&r.emp!==empFilter)continue;
+    if(rubFilter&&r.rub!==rubFilter)continue;
+    const nom=String(r.cli||'').replace(/^\s*\d+\s*[-.:]?\s*/,'').replace(/\s+/g,' ').trim()||'(sin cliente)';
+    const k=nom.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    if(!byCli[k])byCli[k]={cli:nom,total:0,comps:new Set()};
+    byCli[k].total+=r.vta;
+    if(r.comp)byCli[k].comps.add(r.comp);
+  }
+  const lst=Object.values(byCli).map(r=>({cli:r.cli,total:r.total,n:r.comps.size}));
+  const tot=lst.reduce((s,r)=>s+r.total,0);
+  const totN=lst.reduce((s,r)=>s+r.n,0);
+  const dir=estDetSortDir==='asc'?1:-1;
+  lst.sort((a,b)=>{
+    if(estDetSortCol==='cli')return dir*a.cli.localeCompare(b.cli,'es');
+    const va=estDetSortCol==='n'?a.n:a.total, vb=estDetSortCol==='n'?b.n:b.total;
+    return dir*(va-vb)||a.cli.localeCompare(b.cli,'es');
+  });
+  const arrow=c=>estDetSortCol===c?(estDetSortDir==='asc'?' ▲':' ▼'):'';
+  const pct=v=>tot?(v/tot*100).toFixed(1)+'%':'—';
+  const body=lst.map(r=>`<tr><td class="cl" title="${esc(r.cli)}">${esc(r.cli)}</td><td class="r"><span class="v">${r.n.toLocaleString('es-AR')}</span></td><td class="r"><span class="v" style="font-weight:600">${fmtFull(r.total)}</span></td><td class="r"><span class="v">${pct(r.total)}</span></td></tr>`).join('');
+  const foot=`<tr class="gdet-tot"><td>Total general</td><td class="r"><span class="v">${totN.toLocaleString('es-AR')}</span></td><td class="r"><span class="v">${fmtFull(tot)}</span></td><td class="r"><span class="v">${tot?'100.0%':'—'}</span></td></tr>`;
+  const per=(est==='Transito')?'acumulado (todos los meses)':(mesFilter?MLBL[mesFilter]:'año completo');
+  wrap.innerHTML=`<div class="gdet-wrap">
+    <div class="c-head" style="margin-bottom:10px">
+      <span class="c-title" style="font-size:15px">${esc(est)} · ${esc(per)} · detalle por cliente</span>
+      <span class="c-note">${lst.length} clientes · venta bruta (sin NDC) <button type="button" id="estDetClose" class="clear-btn" style="margin-left:8px">× Cerrar</button></span>
+    </div>
+    ${lst.length?`<div class="gdet-scroll"><table class="tbl gdet"><thead><tr><th data-ecol="cli">CLIENTE${arrow('cli')}</th><th class="r" data-ecol="n">REMITOS${arrow('n')}</th><th class="r" data-ecol="total">IMPORTE${arrow('total')}</th><th class="r">% DEL ESTADO</th></tr></thead><tbody>${body}${foot}</tbody></table></div>`
+    :`<div style="color:var(--mut);font-size:13px;padding:8px 0">Sin datos de ${esc(est)} con los filtros actuales.</div>`}
+  </div>`;
+  const cb=document.getElementById('estDetClose');
+  if(cb)cb.onclick=()=>{estadoDetActivo=null;renderEstados(rows(),rows().reduce((s,d)=>s+d.v,0));};
+  wrap.querySelectorAll('th[data-ecol]').forEach(th=>{
+    th.onclick=()=>{
+      const c=th.dataset.ecol;
+      if(estDetSortCol===c)estDetSortDir=estDetSortDir==='asc'?'desc':'asc';
+      else{estDetSortCol=c;estDetSortDir=c==='cli'?'asc':'desc';}
+      renderEstadoDetalle();
+    };
+  });
 }
 
 // "Estado de remito" -> detalle diario por empresa (pedido 27/08/2026): 3 bloques SIEMPRE fijos
@@ -1574,8 +1676,9 @@ function processRawRows(rawRows, sourceName) {
   FAM_ROWS.length=0;
   ESTREM_ROWS.length=0;
   KPIVTA_ROWS.length=0;
-  for(const k in ORIG_AGG)delete ORIG_AGG[k];
   for(const k in ORIG_DAYAGG)delete ORIG_DAYAGG[k];
+  ORIG_CLI_ROWS.length=0;
+  ESTCLI_ROWS.length=0;
   const _seenComp=new Set();
   // _parseFechaMesDay (v178, 28/09/2026): parsea un string de fecha (ISO "AAAA-MM-DD..." o
   // "DD/MM/AAAA"/"DD/MM/AA") a {mes:"AAAA-MM", day:DD}. Se saca afuera del for como función
@@ -1606,32 +1709,16 @@ function processRawRows(rawRows, sourceName) {
     const _fd = _parseFechaMesDay(fecha);
     if(!_fd) { skipped++; continue; }
     let mes=_fd.mes, dayNum=_fd.day;
-    // Fecha real de cambio de estado — prioridad de 3 niveles (v178, 28/09/2026; reemplaza el
-    // esquema de un solo nivel del archivo 175/176):
-    // 1) Columna nativa "FEC. ACT." que Otecno agregó a la bajada del ERP (fines de 09/2026,
-    //    columna E). Si esta fila trae ahí un valor parseable, se usa ESE mes/día en vez del de
-    //    FECHA. OJO (ver archivo 177 para el detalle completo): sobre un export real de prueba
-    //    del 28/09/2026, esta columna vino vacía en el 99% de los comprobantes (2586 de 2601) y,
-    //    en los pocos casos con valor, siempre coincidía con FECHA (remitos creados ese mismo
-    //    día) — o sea que, por ahora, no parece ser retroactiva para remitos viejos que ya habían
-    //    cambiado de estado antes de que Otecno la active. Se implementa igual sin esperar,
-    //    porque no tiene costo: si viene vacía, no hace nada y sigue el punto 2. Preguntas
-    //    pendientes a Otecno sobre esta columna: archivo 177, sección 8.
-    // 2) Si FEC. ACT. no tiene valor para este comprobante: FECHA_REAL_POR_COMPROBANTE (mecanismo
-    //    propio del archivo 175/176 vía Apps Script + solapa FECHAS_ACTUALIZADAS). Hoy este
-    //    mecanismo está PAUSADO (la solapa se eliminó, ver archivo 177) así que en la práctica
-    //    FECHA_REAL_POR_COMPROBANTE siempre viene vacío y este punto no hace nada — se deja el
-    //    código igual (Caso C del archivo 177: híbrido, por si se retoma como respaldo intermedio
-    //    para el período en que sólo este mecanismo propio estuvo activo).
-    // 3) Si ninguno de los 2 anteriores tiene dato para este comprobante: se sigue usando el
-    //    mes/día de FECHA de siempre — cero impacto en remitos sin ninguna novedad de estado.
+    // Fecha real de cambio de estado (v178, 28/09/2026 — columna nativa; simplificado en v181,
+    // 28/09/2026, ver changelog al pie de este archivo para el porqué): si "FEC. ACT." (columna
+    // que Otecno agregó a la bajada del ERP con la fecha real del último cambio de estado de
+    // cada remito) trae un valor parseable en esta fila, se usa ESE mes/día en vez del de FECHA
+    // — para que un remito que vino "flotando" en Transito/Reparto desde un mes anterior y
+    // recién ahora cambió de estado, sume su venta al mes en que realmente se confirmó. Si viene
+    // vacía (remitos que todavía no registraron ningún cambio de estado desde que Otecno activó
+    // la columna), no hace nada y se sigue usando el mes/día de FECHA de siempre.
     const _fechaAct = _parseFechaMesDay(r['FEC. ACT.']);
-    if(_fechaAct){
-      mes=_fechaAct.mes; dayNum=_fechaAct.day;
-    } else {
-      const _compParaFecha=String(r['COMPROBANTE']||'').trim();
-      if(_compParaFecha&&FECHA_REAL_POR_COMPROBANTE[_compParaFecha])mes=FECHA_REAL_POR_COMPROBANTE[_compParaFecha];
-    }
+    if(_fechaAct){ mes=_fechaAct.mes; dayNum=_fechaAct.day; }
     const cli = sc(r['CLIENTE']);
     let rub = String(r['RUBRO']||'OTROS').trim(); if(rub==='-'||!rub)rub='OTROS';
     const estado = String(r['ESTADO']||'Firmada').trim();
@@ -1648,7 +1735,7 @@ function processRawRows(rawRows, sourceName) {
       // SÍ incluye Tránsito, y guarda cada estado por separado (sin fundir Firmada+Ingresada).
       KPIVTA_ROWS.push({mes,day:dayNum,emp,rub,estado,cliente:cli,vta});
       // DAYAGG alimenta el KPI "vs. mes anterior": ya NO contempla Transito (pedido 29/07/2026).
-      // Los gauges por fábrica (ORIG_AGG/ORIG_DAYAGG) y Seguimiento comerciales (EJEC_ROWS), más
+      // Los gauges por fábrica (ORIG_CLI_ROWS/ORIG_DAYAGG) y Seguimiento comerciales (EJEC_ROWS), más
       // abajo en este mismo bloque, siguen incluyendo Transito sin cambios.
       if(estado!=='Transito'){
         if(!DAYAGG[mes])DAYAGG[mes]={};
@@ -1668,21 +1755,13 @@ function processRawRows(rawRows, sourceName) {
           ESTREM_ROWS.push({mes,day:dayNum,grupo:_grupoER,bucket:_bucketER,comp,prodCode:_pcode,prodName:sp(_prodNombre),cliente:sc(rawcli),cant:qty,vta});
         }
       }
-      let _origRaw=PROD_LOOKUP[_pcode]||'TERCEROS';
-      // Corrección manual: todo producto "MANTEL" se reporta como GRAFICA, sin importar
-      // lo que diga el ABM de productos del ERP (hay códigos de mantel mal cargados como
-      // BARMAN/otros que todavía no fueron corregidos en el ERP) — pedido 23/07/2026
-      if(/MANTEL/i.test(_prodNombre)) _origRaw='GRAFICA';
-      // PROPIO excluido por ahora (sin gauge); no encontrado → TERCEROS
-      const _orig=(_origRaw==='PROPIO')?null:_origRaw;
-      if(_orig){
-        if(!ORIG_AGG[_orig])ORIG_AGG[_orig]={};
-        if(!ORIG_AGG[_orig][mes])ORIG_AGG[_orig][mes]={};
-        ORIG_AGG[_orig][mes][emp]=(ORIG_AGG[_orig][mes][emp]||0)+vta;
-        if(!ORIG_DAYAGG[_orig])ORIG_DAYAGG[_orig]={};
-        if(!ORIG_DAYAGG[_orig][mes])ORIG_DAYAGG[_orig][mes]={};
-        ORIG_DAYAGG[_orig][mes][dayNum]=(ORIG_DAYAGG[_orig][mes][dayNum]||0)+vta;
-      }
+      // Fábrica del producto (ver resolverOrigen) → detalle para "Cumplimiento por fábrica".
+      // Se guarda cada fila con empresa, rubro y día para respetar los filtros del tablero.
+      const _orig=resolverOrigen(_pcode,_prodNombre);
+      ORIG_CLI_ROWS.push({orig:_orig,mes,emp,rub,cli:rawcli,estado,vta,prod:_prodNombre});
+      if(!ORIG_DAYAGG[_orig])ORIG_DAYAGG[_orig]={};
+      if(!ORIG_DAYAGG[_orig][mes])ORIG_DAYAGG[_orig][mes]={};
+      ORIG_DAYAGG[_orig][mes][dayNum]=(ORIG_DAYAGG[_orig][mes][dayNum]||0)+vta;
       // Acumular por día+producto para sección UTILIDAD AYER
       const _ejec=String(r['EJECUTIVO']||r['VENDEDOR']||'').trim();
       const _rawcli=String(r['CLIENTE']||'').trim();
@@ -1721,6 +1800,7 @@ function processRawRows(rawRows, sourceName) {
     const key = `${mes}|${cli}|${rub}|${estado}|${emp}`;
     if(!agg[key])agg[key]={mes,cli,rub,estado,emp,vta:0,cos:0,qty:0};
     agg[key].vta+=vta; agg[key].cos+=cos; agg[key].qty+=qty;
+    ESTCLI_ROWS.push({mes,emp,rub,estado,cli:rawcli,comp,vta}); // detalle por cliente de Estado de remito (archivo 184)
     const prod = sp(r['PRODUCTO']||'');
     const pk = `${mes}|${prod}`;
     if(!pAgg[pk])pAgg[pk]={mes,prod,vta:0,qty:0};
@@ -1892,21 +1972,24 @@ const pendComExpanded=new Set(); // comerciales expandidos en "Pendientes por co
 const UTILMIN_POR_PRODUCTO={'LA0017':15,'LA0060':15,'LA0078':28,'LA0079':28,'LA0081':15,'LB0003':25,'LB0006':25,'LB0007':25,'LB0008':25,'LB0010':25,'LB0018':25,'LB0027':28,'LB0031':25,'LB0034':25,'LB0036':25,'LB0048':25,'LB0064':25,'LB0086':25,'LB0091':28,'LB0103':25,'LB0109':30,'LB0110':30,'LB0111':30,'LB0118':25,'LB0186':25,'LB0195':25,'LB0224':25,'LB0237':25,'LB0240':25,'LB0302':50,'LB0303':50,'LB0308':25,'LB0309':25,'LB0314':50,'LB0315':50,'LB0316':50,'LB0317':50,'LB0318':50,'LB0331':25,'LB0350':25,'LB0394':25,'LB0395':25,'LB0396':25,'LB0397':25,'LB0398':25,'LB0428':25,'LB0431':50,'LB0432':50,'LB0503':25,'LB0510':25,'LB0558':25,'LD0104':28,'LD0297':28,'LE0081':28,'LE0082':28,'LE0083':28,'LL0013':28,'LL0027':28,'LL0060':28,'LL0171':28,'LL0225':28,'LL0255':28,'LL0256':28,'LP0054':25,'LP0058':25,'LP0059':25,'LP0083':25,'LP0087':25,'LP0105':25,'LP0111':50,'LP0112':50,'LP0113':50,'LP0114':50,'LP0118':50,'LP0119':50,'LP0152':50,'LP0153':50,'LP0174':25,'LP0175':28,'LP0176':28,'LP0177':28,'LP0178':28,'LP0179':28,'LP0180':28,'LP0181':28,'LP0182':28,'LP0183':28,'LP0184':28,'LP0185':28,'LP0186':28,'LP0187':28,'LP0188':28,'LP0189':28,'LR0089':25,'LT0017':25,'LT0020':40,'LT0021':40,'LT0022':40,'LT0039':25,'LT0045':40,'LT0046':40,'LT0047':40,'LT0087':25,'LT0102':50,'LT0103':50,'LT0122':50,'LT0163':28,'LT0169':50,'MC0224':34,'MC0225':34,'MC0380':34,'MC0483':34,'PA0012':40,'PA0013':40,'PA0017':40,'PA0023':40,'PA2500':40,'PB0004':28,'PB0016':28,'PB0017':28,'PB0018':28,'PB0019':28,'PB0020':28,'PB0021':28,'PB0022':28,'PB0023':28,'PB0024':28,'PB0025':28,'PB0026':28,'PB0027':28,'PB0028':28,'PB0063':28,'PB0069':28,'PB0076':28,'PB0090':30,'PB0091':30,'PB0092':30,'PB0093':30,'PB0094':30,'PB0095':30,'PB0096':30,'PB0097':30,'PB0098':30,'PB0100':30,'PB0102':28,'PB0103':28,'PB0104':30,'PB0110':28,'PB0111':28,'PB0112':28,'PB0116':28,'PB0117':25,'PB0118':25,'PB0119':25,'PB0125':30,'PB0140':34,'PB0141':34,'PB0142':34,'PB0143':34,'PB0144':34,'PB0145':34,'PB0147':34,'PB0149':34,'PB0156':34,'PB0157':28,'PB0158':28,'PB0159':34,'PB0160':34,'PB0161':34,'PB0163':34,'PB0165':28,'PB0166':28,'PB0167':28,'PB0182':28,'PB0183':28,'PB0198':28,'PB0199':28,'PB0200':28,'PB0201':28,'PB0202':28,'PB0203':28,'PB0207':30,'PB0209':28,'PB0215':34,'PB0216':34,'PB0217':34,'PB0218':34,'PB0219':34,'PB0220':34,'PB0223':34,'PB0224':34,'PB0225':34,'PB0227':34,'PB0236':30,'PB0249':30,'PB0250':30,'PB0251':30,'PB0253':30,'PB0257':30,'PB0258':30,'PB0270':28,'PB0271':28,'PB0280':28,'PB0281':28,'PB0283':30,'PB0284':30,'PB0285':30,'PB0288':30,'PB0289':30,'PB0291':28,'PB0292':28,'PB0294':28,'PB0295':28,'PB0298':28,'PB0308':28,'PB0311':28,'PB0312':28,'PB0313':28,'PB0315':28,'PB0320':28,'PB0321':28,'PB0380':28,'PB0391':30,'PB0396':28,'PB0399':28,'PB0413':28,'PB0414':28,'PB0503':28,'PB0504':28,'PB0505':28,'PB0506':28,'PB0517':40,'PB0562':28,'PB0571':28,'PB0580':28,'PB0581':30,'PB0588':28,'PB0591':28,'PB0593':28,'PB0596':30,'PB0597':30,'PB0607':28,'PB0623':30,'PB0624':30,'PB0625':28,'PB0626':28,'PB0627':28,'PB0628':28,'PB0631':28,'PB0632':28,'PB0633':28,'PB0634':28,'PB0635':28,'PB0636':28,'PB0637':28,'PB0640':28,'PB0645':28,'PB0667':28,'PB0678':28,'PB0681':28,'PB0682':28,'PB0685':28,'PB0690':28,'PB0694':28,'PB0695':28,'PB0696':28,'PB0697':28,'PB0698':28,'PB0699':28,'PB0700':28,'PB0701':28,'PB0703':28,'PB0740':28,'PB0757':28,'PB0770':28,'PB0781':28,'PB0782':30,'PB0788':30,'PB0789':30,'PB0790':30,'PB0791':30,'PB0800':28,'PB0801':28,'PB0802':28,'PB0803':28,'PB0804':28,'PB0805':28,'PB0806':28,'PB0807':28,'PB0828':28,'PB0853':28,'PB0854':28,'PB0855':28,'PB0856':28,'PB0857':28,'PB0861':30,'PB0862':30,'PB0885':34,'PB0886':34,'PB0937':28,'PB0941':28,'PB1060':50,'PB1061':50,'PB1066':50,'PB1067':50,'PB1068':50,'PB1093':50,'PB1094':50,'PB1095':50,'PB1096':50,'PB1184':30,'PB1185':30,'PB1186':30,'PB1187':30,'PB1190':28,'PB1191':28,'PB1192':28,'PB1193':28,'PB1194':28,'PB1195':28,'PB1196':28,'PB1197':28,'PB1198':28,'PB1199':28,'PB1200':28,'PB1202':28,'PB1203':28,'PB1204':28,'PB1205':28,'PB1206':28,'PB1207':28,'PB1208':28,'PB1209':28,'PB1210':28,'PB1212':28,'PB1213':28,'PB1214':28,'PB1215':28,'PB1216':28,'PB1217':28,'PB1218':28,'PB1219':28,'PB1220':28,'PB1221':28,'PB1222':28,'PB1224':28,'PB1225':28,'PB1226':28,'PB1227':28,'PB1228':28,'PB1229':28,'PB1230':28,'PB1231':28,'PB1232':28,'PB1233':28,'PB1235':28,'PB1236':28,'PB1237':28,'PB1238':28,'PB1239':28,'PB1240':28,'PB1241':28,'PB1242':28,'PB1243':28,'PB1244':28,'PB1245':28,'PB1246':28,'PB1247':28,'PB1248':28,'PB1249':28,'PB1250':28,'PB1251':28,'PB1252':28,'PB1253':28,'PB1254':28,'PB1255':28,'PB1256':28,'PB1257':28,'PB1258':28,'PB1259':28,'PB1260':28,'PB1261':28,'PB1262':28,'PB1263':28,'PB1264':28,'PB1265':28,'PB1266':28,'PB1267':28,'PB1268':28,'PB1269':28,'PB1270':28,'PB1271':28,'PB1273':28,'PB1274':28,'PB1275':28,'PB1276':28,'PB1277':28,'PB1278':28,'PB1279':28,'PB1280':28,'PB1282':28,'PB1283':28,'PB1284':28,'PB1285':28,'PB1286':28,'PB1287':28,'PB1288':28,'PB1289':28,'PB1290':28,'PB1291':28,'PB1292':28,'PB1293':28,'PB1294':28,'PB1295':28,'PB2000':28,'PB2001':28,'PB2002':28,'PB2003':28,'PB2004':28,'PB2005':28,'PB2006':28,'PB2007':28,'PB2008':28,'PB2009':28,'PB2500':40,'PC0005':30,'PC0006':30,'PC0011':34,'PC0058':40,'PC0074':25,'PC0080':40,'PC0081':40,'PC0082':40,'PC0100':28,'PC0111':34,'PC0154':28,'PC0162':28,'PC0165':28,'PC0233':40,'PC0301':40,'PC0302':40,'PC0303':40,'PC0304':40,'PC0380':40,'PC0382':40,'PC0412':40,'PC0413':40,'PC0414':40,'PC0415':40,'PC0416':40,'PC0417':40,'PC0418':40,'PC0419':40,'PC0420':40,'PC0421':40,'PC0423':40,'PE0006':40,'PE0010':30,'PE0011':28,'PE0013':28,'PE0024':30,'PE0026':28,'PE0028':30,'PE0040':28,'PE0047':30,'PE0063':25,'PE0066':40,'PE0067':40,'PE0068':40,'PE0081':40,'PE0082':40,'PE0084':35,'PE0085':28,'PE0090':28,'PE0091':28,'PE0092':28,'PE0093':28,'PE0094':28,'PE0095':28,'PE0096':28,'PE0097':28,'PE0667':28,'PE2500':40,'PF0023':35,'PF0024':35,'PF0034':30,'PF0035':30,'PF0036':30,'PF0040':35,'PF0045':30,'PF0046':30,'PF0047':30,'PF0048':30,'PF0049':30,'PF0051':30,'PF0052':30,'PF0053':30,'PF0054':30,'PF0071':50,'PF0072':50,'PG0001':40,'PG0090':40,'PG0091':40,'PG0092':40,'PG0093':40,'PG0096':40,'PG0097':40,'PG0098':40,'PG0099':40,'PM0073':28,'PM0074':28,'PM0450':50,'PM0453':50,'PM0455':50,'PM0457':50,'PM0466':50,'PM0469':50,'PM0470':50,'PM0471':50,'PM0472':50,'PM0473':50,'PM0474':50,'PM0475':50,'PM0476':50,'PM0477':50,'PM0478':50,'PM0521':40,'PM0533':28,'PM0534':28,'PM0537':28,'PM0538':28,'PM0539':28,'PM0566':28,'PM0567':28,'PM2000':28,'PO0111':30,'PO0113':30,'PO0124':28,'PO0125':28,'PO0127':30,'PO0128':30,'PO0129':30,'PO0130':30,'PP0001':30,'PP0002':30,'PP0010':40,'PP0011':40,'PP0015':40,'PP0016':40,'PP0040':35,'PP0042':35,'PP0043':35,'PP0049':30,'PP0050':30,'PP0051':50,'PP0052':50,'PP0057':40,'PP0060':40,'PP0075':40,'PP0119':28,'PP0120':28,'PP0126':30,'PP0131':28,'PP0135':28,'PP0155':35,'PP0156':35,'PP0157':35,'PP0192':40,'PP0205':35,'PP0206':35,'PP0207':35,'PP0244':35,'PP0249':40,'PP0250':40,'PP0251':40,'PP0279':35,'PP0286':35,'PP0289':40,'PP0290':25,'PP0291':25,'PP0293':25,'PP0294':25,'PP0359':30,'PP0395':35,'PP0410':28,'PP0425':40,'PP0426':40,'PP0427':28,'PP0428':28,'PP0433':50,'PP0434':50,'PP0435':50,'PP0437':50,'PP0438':50,'PP0452':50,'PP0463':30,'PP0465':40,'PP0552':34,'PP1000':30,'PP1105':50,'PP1106':50,'PP1128':50,'PP1129':50,'PP1130':50,'PP1131':50,'PP1132':50,'PP1133':50,'PP1134':50,'PP1230':28,'PP1231':28,'PP1300':28,'PP1301':28,'PP1302':28,'PP1303':28,'PP1304':28,'PP1305':28,'PP1306':28,'PP1307':28,'PP2000':28,'PP2001':28,'PP2002':28,'PP2003':28,'PP2004':28,'PP2005':28,'PP2006':28,'PP2007':28,'PR0020':35,'PR0038':35,'PR0040':28,'PR0041':28,'PR0042':28,'PR0045':35,'PR0046':35,'PR0047':35,'PR0048':35,'PR0049':35,'PS0002':50,'PS0004':50,'PS0006':50,'PS0007':50,'PS0020':25,'PS0021':25,'PS0022':25,'PS0023':25,'PS0024':25,'PS0025':25,'PS0026':25,'PS0090':35,'PS0092':35,'PS0138':35,'PS0144':35,'PS0240':50,'PS0241':50,'PS0243':50,'PS0245':50,'PS0248':50,'PS0250':50,'PS0252':50,'PS0255':50,'PS0426':50,'PS0521':25,'PS0542':35,'PS0562':50,'PS0563':50,'PS0564':50,'PS0566':35,'PS0617':35,'PS0668':50,'PS0670':50,'PS0728':50,'PS0784':25,'PS0943':40,'PS0944':40,'PS0945':40,'PS1027':50,'PS1048':50,'PS1060':50,'PS1061':50,'PS1100':25,'PT0001':28,'PT0002':28,'PT0003':28,'PT0004':28,'PT0005':28,'PT0006':28,'PT0026':30,'PT0044':28,'PT0069':28,'PT0070':28,'PT0071':28,'PT0074':28,'PT0099':28,'PT0100':28,'PT0101':28,'PT0102':28,'PT0103':28,'PT0104':28,'PT0118':28,'PT0122':28,'PT0127':28,'PT0142':28,'PT0143':28,'PT0148':28,'PT0149':28,'PT0150':28,'PT0156':28,'PT0157':28,'PT0158':28,'PT0159':28,'PT0160':28,'PT0169':28,'PT0176':25,'PT0188':25,'PT0195':28,'PT0268':28,'PT1000':30,'PT1001':30,'PT1003':30,'PT1004':30,'PT1006':30,'PT1007':30,'PT1009':30,'PT1024':50,'PT1035':50,'PT1072':40,'PT1118':40,'PT1119':40,'PT1146':40,'PT1171':50,'PT1184':50,'PT1295':28,'PT1296':28,'PT1297':28,'PT1360':28,'PT1361':28,'PT1362':28,'PT1363':28,'PT1364':28,'PT1365':28,'PT1366':28,'PT1367':28,'PT1368':28,'PT1369':28,'PT1370':28,'PT1371':28,'PT1372':28,'PT1373':28,'PT1374':28,'PT1375':28,'PT1376':28,'PT1377':28,'PT1378':28,'PT1379':28,'PT1380':28,'PT1381':28,'PT1382':28,'PT1383':28,'PT1384':28,'PT1385':28,'PT1386':28,'PT2000':28,'PT2001':28,'PT2002':28,'PT2003':28,'PT2004':28,'PT2005':28,'PT2006':28,'PT2007':28,'PT2008':28,'PT2009':28,'PT2010':28,'PT2011':28,'PT2012':28,'PV0007':25,'PV0140':25,'PV0141':25,'PV0147':25,'PV0148':25,'PV0149':25,'PV0150':25,'PV0151':25,'PV0152':25,'PV0153':25,'PV0158':25,'PV1000':30,'PV1002':30,'PV1003':30,'PV1004':30,'PV1041':28,'PV1042':28,'PV1043':28,'PV1044':28,'PV1045':28,'PV1046':28,'PV1047':28,'PV2000':28,'PV2001':28,'PV2002':28};
 function utilMinDe(codigo){ const v=UTILMIN_POR_PRODUCTO[codigo]; return v!==undefined?v:50; }
 const PROD_LOOKUP={};
-// FECHA_REAL_POR_COMPROBANTE (archivo 175, 23/09/2026): { COMPROBANTE -> "YYYY-MM" }.
-// Se arma desde la solapa FECHAS_ACTUALIZADAS del Google Sheets (la llena un Apps Script
-// que corre en la planilla, comparando la bajada de remitos de hoy contra la de ayer y
-// detectando que comprobantes cambiaron de ESTADO — ver processFechasActualizadasRows()
-// más abajo). Se usa dentro de processRawRows() para que un remito que vino "flotando"
-// en Transito/Reparto desde un mes anterior y recién ahora cambió de estado, sume su
-// venta al mes en que realmente se confirmó, en vez de al mes de su FECHA original. La
-// otra mitad de este sistema (el Apps Script que corre DENTRO del Google Sheet y llena
-// FECHAS_ACTUALIZADAS) vive fuera de este archivo — ver los archivos 172/173/174 en la
-// misma carpeta del proyecto (172: primera versión; 173: se confirmó en vivo el nombre
-// real de la solapa principal, "VENTA REMITOS"; 174: se renombró la función principal
-// porque Apps Script esconde del selector de "Ejecutar" a las funciones que terminan en
-// guion bajo). Ver también el archivo 176 al pie de este mismo archivo (changelog) para
-// el razonamiento completo de por qué se armó así.
-const FECHA_REAL_POR_COMPROBANTE={};
+// PROV_LOOKUP (archivo 189): código de producto → PROVEEDOR (columna G de "listado productos").
+// Sólo se usa para los productos con ORIGEN = PROPIO, ver resolverOrigen().
+const PROV_LOOKUP={};
+// Fábrica (BARMAN/GRAFICA/TUBOS/VYMAT/TERCEROS) a la que pertenece un producto. Regla (archivo 189):
+// 1) todo producto "MANTEL" va a GRAFICA (corrección manual del 23/07/2026, sin importar el ABM);
+// 2) si no, vale ORIGEN (columna V de "listado productos"); sin dato → TERCEROS;
+// 3) si ORIGEN = PROPIO se mira el PROVEEDOR (columna G): contiene BARMAN → BARMAN, TUBOS (ej.
+//    "FABRICA DE TUBOS") → TUBOS, VYMAT → VYMAT; cualquier otro proveedor → TERCEROS.
+function resolverOrigen(pcode,prodNombre){
+  if(/MANTEL/i.test(prodNombre))return 'GRAFICA';
+  const o=PROD_LOOKUP[pcode]||'TERCEROS';
+  if(o!=='PROPIO')return o;
+  const pv=String(PROV_LOOKUP[pcode]||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+  if(pv.includes('BARMAN'))return 'BARMAN';
+  if(pv.includes('TUBOS'))return 'TUBOS';
+  if(pv.includes('VYMAT'))return 'VYMAT';
+  return 'TERCEROS';
+}
 // FAM_LOOKUP: { CODIGO → FAMILIA } — columna Q de LISTADO PRODUCTOS en el Google Sheets en
 // vivo (pedido 25/08/2026, para "Utilidad anual por familias de productos"). AJUSTE 26/08/2026:
 // el usuario pidió que la tabla muestre ÚNICAMENTE estas 11 familias puntuales (no todas las
@@ -1927,8 +2010,24 @@ const FAM_ALLOWLIST_NEG=new Set([...FAM_ALLOWLIST,'RESIMAX']);
 const FAM_ROWS=[]; // filas activas por familia de producto: {mes,familia,emp,rub,vta,cos,estado}
 const CLIENT_LOOKUP={}; // { codigoCliente → ejecutivo }
 const CLIENT_NAME_LOOKUP={}; // { nombreNormalizado → ejecutivo } — para cruzar por razón social (ej: pendientes)
-const ORIG_AGG={};
-const ORIG_DAYAGG={}; // { ORIGEN: { MES: { DIA: vta } } } — para avance diario
+// ORIG_CLI_ROWS (archivo 182, reformulado en 189): [{orig,mes,day,emp,rub,cli,estado,vta,prod}] — una fila
+// por línea de remito en estado Firmada/Ingresada/Reparto/Tránsito, con su fábrica (resolverOrigen),
+// el mes/día según FEC. ACT. (o FECHA si está vacía), empresa, rubro, cliente y producto. Es la ÚNICA
+// fuente de "Cumplimiento por fábrica" (medidores MENSUAL y AVANCE DIARIO y su listado por cliente).
+// Criterio igual a la tarjeta "Venta activa gerencia": venta bruta (sin descontar NDC), Firmada +
+// Ingresada + Reparto del mes y TODO el Tránsito acumulado (de cualquier mes), con los filtros de
+// empresa/rubro (ver gaugeRowCuenta).
+// ORIG_DAYAGG (restaurado en 190): { FÁBRICA: { MES: { DIA: vta } } } — alimenta SOLO "Cumplimiento por
+// fábrica - AVANCE DIARIO", con su criterio original (anterior a la v189): último mes con datos, todas
+// las empresas, sin filtros, remitos Firmada/Ingresada/Reparto/Tránsito del mes (por FEC. ACT./FECHA)
+// NETOS de notas de crédito/débito. La fábrica se clasifica con resolverOrigen() (PROPIO por proveedor).
+const ORIG_DAYAGG={};
+const ESTCLI_ROWS=[]; let estadoDetActivo=null; let estDetSortCol='total'; let estDetSortDir='desc'; // detalle por cliente de "Estado de remito" (archivo 184)
+const ORIG_CLI_ROWS=[];
+let gaugeDetalleActivo=null; // fábrica con el listado desplegado (null = ninguna). Una sola a la vez.
+let gaugeDetSortCol='total'; // columna de orden del listado: 'cli' | clave de estado | 'total'
+let gaugeDetSortDir='desc';
+let gaugeDetCliAbiertos=new Set(); // clientes con productos desplegados (archivo 185) // 'asc' | 'desc'
 const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT','TERCEROS'];
 let famAnualSortCol='util'; let famAnualSortDir='desc'; // orden tabla "Utilidad anual por familias de productos"
 let famNegActiveFamilia=null; // familia con el listado de clientes <60% util desplegado (una sola a la vez) — "Utilidad negativa de clientes por familias de productos"
@@ -2332,48 +2431,19 @@ function calcPendientesFiltered(){
 
 function processProductRows(rows){
   for(const k in PROD_LOOKUP)delete PROD_LOOKUP[k];
+  for(const k in PROV_LOOKUP)delete PROV_LOOKUP[k];
   for(const k in FAM_LOOKUP)delete FAM_LOOKUP[k];
   for(const r of rows){
     const cod=String(r['CODIGO']||'').trim();
     const orig=String(r['ORIGEN']||'').trim();
     if(cod&&orig)PROD_LOOKUP[cod]=orig;
+    const prov=String(r['PROVEEDOR']||'').trim();
+    if(cod&&prov)PROV_LOOKUP[cod]=prov;
     // FAMILIA (columna Q de LISTADO PRODUCTOS) — pedido 25/08/2026. Se guarda tal cual viene
     // del sheet; el filtro a las 11 familias pedidas (FAM_ALLOWLIST) se aplica después, al
     // acumular FAM_ROWS.
     const fam=String(r['FAMILIA']||'').trim();
     if(cod&&fam)FAM_LOOKUP[cod]=fam;
-  }
-}
-
-// processFechasActualizadasRows (archivo 175, 23/09/2026): arma FECHA_REAL_POR_COMPROBANTE
-// a partir de la solapa FECHAS_ACTUALIZADAS. Esa solapa trae, como mucho, UNA fila por
-// comprobante (el Apps Script la arma con upsert, no con append — ver el script de Apps
-// Script en la carpeta del proyecto), con columnas COMPROBANTE/ESTADO_ANTERIOR/
-// ESTADO_ACTUAL/FECHA_ORIGINAL_REMITO/FECHA_REAL_CAMBIO. Acá solo nos interesan
-// COMPROBANTE y FECHA_REAL_CAMBIO — se reduce a "YYYY-MM" con el mismo criterio de parseo
-// de fecha (ISO o dd/mm/aaaa, tolerante a que venga con hora pegada) que ya usa
-// processRawRows() para la columna FECHA. El Apps Script que llena esta solapa (archivos
-// 172-174) hace upsert, no append — por eso acá no hace falta "quedarse con la última
-// fila de cada comprobante": cada comprobante aparece como mucho una vez.
-function processFechasActualizadasRows(rows){
-  for(const k in FECHA_REAL_POR_COMPROBANTE)delete FECHA_REAL_POR_COMPROBANTE[k];
-  for(const r of rows){
-    const comp=String(r['COMPROBANTE']||'').trim();
-    const fs=String(r['FECHA_REAL_CAMBIO']||'').trim().split(' ')[0]; // por si viene con hora pegada
-    if(!comp||!fs)continue;
-    let mes=null;
-    const iso=fs.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if(iso){
-      mes=`${iso[1]}-${iso[2]}`;
-    } else {
-      const p=fs.split('/');
-      if(p.length>=3){
-        const y=p[2].length===4?p[2]:`20${p[2]}`;
-        const mo=p[1].padStart(2,'0');
-        mes=`${y}-${mo}`;
-      }
-    }
-    if(mes)FECHA_REAL_POR_COMPROBANTE[comp]=mes;
   }
 }
 
@@ -2396,14 +2466,26 @@ function makeGaugeSVG(pct){
   return `<svg viewBox="0 0 220 120" style="width:100%">${zones}${base}${needle}${cdot}</svg>`;
 }
 
-// Devuelve vta de una fábrica en un mes — siempre total, sin filtros de empresa/rubro
-function getOrigVta(orig, mes){
-  const byEmp=ORIG_AGG[orig]&&ORIG_AGG[orig][mes];
-  if(!byEmp)return 0;
-  return Object.values(byEmp).reduce((a,b)=>a+b,0);
+// Mes que muestran los medidores de "Cumplimiento por fábrica": el mes filtrado arriba o, si no hay
+// ninguno, el último mes con datos (archivo 189).
+function gaugeMesSel(){return mesFilter||MESES[MESES.length-1];}
+// ¿La fila de ORIG_CLI_ROWS cuenta para la fábrica/mes? (archivo 189) Mismo criterio que la tarjeta
+// "Venta activa gerencia": respeta empresa/grupo/rubro; el Tránsito cuenta SIEMPRE (acumulado, de
+// cualquier mes); el resto de los estados (Firmada/Ingresada/Reparto) sólo los del mes elegido.
+function gaugeRowCuenta(r,orig,mes){
+  if(r.orig!==orig)return false;
+  if(empGrupoFilter&&!(EMP_GRUPOS[empGrupoFilter]||[]).includes(r.emp))return false;
+  if(empFilter&&r.emp!==empFilter)return false;
+  if(rubFilter&&r.rub!==rubFilter)return false;
+  if(r.estado==='Transito')return true;
+  return r.mes===mes;
 }
-
+// Venta de una fábrica en un mes (venta bruta + Tránsito acumulado)
+function getOrigVta(orig, mes){
+  return ORIG_CLI_ROWS.reduce((s,r)=>gaugeRowCuenta(r,orig,mes)?s+r.vta:s,0);
+}
 // Venta de una fábrica en un mes, sumada solo hasta un día del mes (inclusive) — para avance diario
+// (criterio original, ORIG_DAYAGG: neto de NDC, Tránsito del mes, sin filtros; ver ORIG_DAYAGG).
 function getOrigVtaHastaDia(orig, mes, diaMax){
   const byDay=ORIG_DAYAGG[orig]&&ORIG_DAYAGG[orig][mes];
   if(!byDay||diaMax<=0)return 0;
@@ -2480,20 +2562,13 @@ function processNdcRows(rawRows){
     if(!idNcr && !idDb) continue; // línea sin ninguna nota vinculada
     const emp=EL_NDC[String(r['EMPRESA']||'').trim()]||String(r['EMPRESA']||'').trim();
     const cliRaw=String(r['CLIENTE']||'').trim();
-    // Fábrica/origen, misma lógica que processRawRows (incluido el override de manteles)
-    const _prodNombre=String(r['PRODUCTO']||'').trim();
-    const _pcode=_prodNombre.split(/\s+/)[0].toUpperCase();
-    let _origRaw=PROD_LOOKUP[_pcode]||'TERCEROS';
-    if(/MANTEL/i.test(_prodNombre)) _origRaw='GRAFICA';
-    const origen=(_origRaw==='PROPIO')?null:_origRaw;
-    const _ensureMes=()=>{ if(!NDC_MES_AGG[mes]) NDC_MES_AGG[mes]={}; if(!NDC_MES_AGG[mes][emp]) NDC_MES_AGG[mes][emp]={ncrTotal:0,ncrCount:0,ndbTotal:0,ndbCount:0}; };
+    // NDC en AVANCE DIARIO (restaurado en 190): netea ORIG_DAYAGG como antes de la v189 (MENSUAL no las usa)
+    const _origNdc=resolverOrigen(String(r['PRODUCTO']||'').trim().split(/\s+/)[0].toUpperCase(),String(r['PRODUCTO']||'').trim());
     const _applyOrig=(monto)=>{
-      if(!origen) return;
-      if(!ORIG_AGG[origen]) ORIG_AGG[origen]={}; if(!ORIG_AGG[origen][mes]) ORIG_AGG[origen][mes]={};
-      ORIG_AGG[origen][mes][emp]=(ORIG_AGG[origen][mes][emp]||0)+monto;
-      if(!ORIG_DAYAGG[origen]) ORIG_DAYAGG[origen]={}; if(!ORIG_DAYAGG[origen][mes]) ORIG_DAYAGG[origen][mes]={};
-      ORIG_DAYAGG[origen][mes][dia]=(ORIG_DAYAGG[origen][mes][dia]||0)+monto;
+      if(!ORIG_DAYAGG[_origNdc]) ORIG_DAYAGG[_origNdc]={}; if(!ORIG_DAYAGG[_origNdc][mes]) ORIG_DAYAGG[_origNdc][mes]={};
+      ORIG_DAYAGG[_origNdc][mes][dia]=(ORIG_DAYAGG[_origNdc][mes][dia]||0)+monto;
     };
+    const _ensureMes=()=>{ if(!NDC_MES_AGG[mes]) NDC_MES_AGG[mes]={}; if(!NDC_MES_AGG[mes][emp]) NDC_MES_AGG[mes][emp]={ncrTotal:0,ncrCount:0,ndbTotal:0,ndbCount:0}; };
     if(idNcr && !seenNcr.has(idNcr)){
       seenNcr.add(idNcr);
       // Exclusión NCR(D) — pedido 04/08/2026 (confirmado con el usuario, multiple choice):
@@ -3877,8 +3952,8 @@ function renderKpiDetalle(){
   if(kpiActiveCard==='ventaSinNdc'){ renderVentaSinNdcDetalle(wrap); return; }
   if(kpiActiveCard==='ventaNdc'){ renderVentaNdcDetalle(wrap); return; }
   const TITULOS={
-    ventaNdc:'Venta activa · con NDCs', ventaSinNdc:'Venta activa · sin NDCs',
-    cliUnicos:'Clientes únicos', cliNuevos:'Clientes nuevos'
+    ventaNdc:'Venta activa comercial', ventaSinNdc:'Venta activa gerencia',
+    cliUnicos:'Clientes activos', cliNuevos:'Clientes nuevos'
   };
   const titulo=TITULOS[kpiActiveCard]||'';
   const list=computeKpiClientList(kpiActiveCard);
@@ -4077,20 +4152,20 @@ function countWorkingDaysInMonth(year, monthIndex0){
 
 function renderGauges(){
   if(!MESES.length)return;
-  const curMes=MESES[MESES.length-1];
+  const curMes=gaugeMesSel();
   // Info cards (read-only) — objetivo fijo asignado por gerencia + venta real del mes
   const _infoRow=document.getElementById('infoRow');
   _infoRow.innerHTML=FABRICAS_GAUGE.map(f=>{
     const obj=GAUGE_OBJETIVOS[f]||0;
     const actual=getOrigVta(f,curMes);
     const pctCol2=actual>=obj?'var(--teal)':'#f87171';
-    return `<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
+    return `<div class="gauge-clic${gaugeDetalleActivo===f?' on':''}" data-fab="${f}" title="Clic para ver el detalle por cliente" style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
       <div style="font-size:10px;color:var(--mut2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;font-weight:600">${f}</div>
       <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Objetivo: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(obj)}</span></div>
       <div style="font-size:11px;color:var(--mut)">Venta: <span style="font-family:'IBM Plex Mono',monospace;color:${pctCol2}">${fmtM(actual)}</span></div>
     </div>`;
   }).join('');
-  document.getElementById('gaugesNote').textContent='';
+  document.getElementById('gaugesNote').textContent=`${MLBL[curMes]||curMes}${empGrupoFilter?' · '+empGrupoFilter:''}${empFilter?' · '+empFilter:''}${rubFilter?' · '+rubFilter:''} · incl. Tránsito acumulado · sin NDC · clic en un medidor o tarjeta para ver el detalle por cliente`;
   // Gauges
   const grid=document.getElementById('gaugesGrid');
   grid.innerHTML=FABRICAS_GAUGE.map(f=>{
@@ -4099,18 +4174,113 @@ function renderGauges(){
     const pct=obj>0?actual/obj:0;
     const pctDisp=(pct*100).toFixed(1);
     const col=pct<0.4?'#f87171':pct<0.7?'#fb923c':pct<0.85?'#facc15':'#4ade80';
-    return `<div style="text-align:center;padding:6px 4px">
+    return `<div class="gauge-clic${gaugeDetalleActivo===f?' on':''}" data-fab="${f}" title="Clic para ver el detalle por cliente" style="text-align:center;padding:6px 4px">
       <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:13px;letter-spacing:.08em;margin-bottom:2px">${f}</div>
       ${makeGaugeSVG(pct)}
       <div style="font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:${col};margin-top:2px;line-height:1">${pctDisp}%</div>
       <div style="font-size:11px;color:var(--mut);margin-top:4px">${fmtFull(actual)} / ${fmtFull(obj)}</div>
     </div>`;
   }).join('');
+  // Clic en medidor o tarjeta de una fábrica (archivo 182): despliega/cierra el listado por
+  // cliente justo debajo, a todo el ancho de la sección. Una sola fábrica abierta a la vez:
+  // clic en otra reemplaza el listado, clic en la misma lo cierra.
+  document.querySelectorAll('#gaugesGrid [data-fab],#infoRow [data-fab]').forEach(el=>{
+    el.onclick=()=>{
+      gaugeDetalleActivo=(gaugeDetalleActivo===el.dataset.fab)?null:el.dataset.fab;
+      gaugeDetCliAbiertos.clear();
+      renderGauges();
+    };
+  });
+  renderGaugeDetalle(curMes);
+}
+
+// renderGaugeDetalle (archivo 182, 08/10/2026): listado desplegable de "Cumplimiento por
+// fábrica - MENSUAL" con lo que compone el total de la fábrica seleccionada, por cliente.
+// Columnas: CLIENTE, FIRMADA, INGRESADA, REPARTO, TRANSITO, TOTAL. Sale de ORIG_CLI_ROWS con el mismo
+// criterio que el medidor (gaugeRowCuenta: venta bruta sin NDC, Tránsito acumulado, filtros de
+// mes/empresa/rubro) — por eso la fila "Total general" coincide exacto con el número de la tarjeta.
+// Agrupa por razón social (sin el código numérico de punto de venta) y no lleva gráfico.
+// Se puede ordenar al clic en cada encabezado (gaugeDetSortCol/gaugeDetSortDir).
+function renderGaugeDetalle(curMes){
+  const wrap=document.getElementById('gaugesDetalle');
+  if(!wrap)return;
+  const f=gaugeDetalleActivo;
+  if(!f){wrap.innerHTML='';return;}
+  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  // 1) Agrupar por cliente y estado
+  const byCli={};
+  const BASE=['Firmada','Ingresada','Reparto','Transito'];
+  for(const r of ORIG_CLI_ROWS){
+    if(!gaugeRowCuenta(r,f,curMes))continue;
+    // razón social sin el código numérico de punto de venta (ej: "340132 CENTRAPAL SRL" y
+    // "340139 CENTRAPAL SRL" → una sola fila). La clave ignora mayúsculas, acentos y espacios repetidos.
+    const nom=String(r.cli||'').replace(/^\s*\d+\s*[-.:]?\s*/,'').replace(/\s+/g,' ').trim()||'(sin cliente)';
+    const k=nom.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    if(!byCli[k])byCli[k]={cli:nom,vals:{},total:0,prods:{}};
+    const pn=String(r.prod||'').replace(/\s+/g,' ').trim()||'(sin producto)';
+    const pr=byCli[k].prods[pn]||(byCli[k].prods[pn]={name:pn,vals:{},total:0});
+    pr.vals[r.estado]=(pr.vals[r.estado]||0)+r.vta; pr.total+=r.vta;
+    byCli[k].vals[r.estado]=(byCli[k].vals[r.estado]||0)+r.vta;
+    byCli[k].total+=r.vta;
+  }
+  const cols=BASE; // columnas = estados que suman (venta bruta, sin NDC)
+  const rows=Object.values(byCli);
+  const mesLbl=(MLBL[curMes]||curMes);
+  const totGen={total:0}; cols.forEach(c=>totGen[c]=0);
+  rows.forEach(r=>{cols.forEach(c=>totGen[c]+=(r.vals[c]||0)); totGen.total+=r.total;});
+  // 2) Orden
+  const dir=gaugeDetSortDir==='asc'?1:-1;
+  rows.sort((a,b)=>{
+    if(gaugeDetSortCol==='cli')return dir*a.cli.localeCompare(b.cli,'es');
+    const va=gaugeDetSortCol==='total'?a.total:(a.vals[gaugeDetSortCol]||0);
+    const vb=gaugeDetSortCol==='total'?b.total:(b.vals[gaugeDetSortCol]||0);
+    return dir*(va-vb)||a.cli.localeCompare(b.cli,'es');
+  });
+  // 3) Tabla
+  const lbl=c=>c.toUpperCase();
+  const arrow=c=>gaugeDetSortCol===c?(gaugeDetSortDir==='asc'?' ▲':' ▼'):'';
+  const cell=v=>(v&&Math.round(v)!==0)?fmtFull(v):'—';
+  const head=`<th data-gcol="cli">CLIENTE${arrow('cli')}</th>`+cols.map(c=>`<th class="r" data-gcol="${c}">${lbl(c)}${arrow(c)}</th>`).join('')+`<th class="r" data-gcol="total">TOTAL${arrow('total')}</th>`;
+  const kOf=r=>r.cli.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+  const body=rows.map(r=>{
+    const k=kOf(r), open=gaugeDetCliAbiertos.has(k);
+    let h=`<tr class="gdet-cli${open?' open':''}" data-gcli="${esc(k)}" title="clic para ver los productos de ${esc(r.cli)}"><td class="cl"><span class="gdet-chev">${open?'▾':'▸'}</span>${esc(r.cli)}</td>${cols.map(c=>`<td class="r"><span class="v">${cell(r.vals[c])}</span></td>`).join('')}<td class="r"><span class="v" style="font-weight:600">${fmtFull(r.total)}</span></td></tr>`;
+    if(open){
+      h+=Object.values(r.prods).sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name,'es')).map(pr=>`<tr class="gdet-prod"><td class="cl" title="${esc(pr.name)}">${esc(pr.name)}</td>${cols.map(c=>`<td class="r"><span class="v">${cell(pr.vals[c])}</span></td>`).join('')}<td class="r"><span class="v">${fmtFull(pr.total)}</span></td></tr>`).join('');
+    }
+    return h;
+  }).join('');
+  const foot=`<tr class="gdet-tot"><td>Total general</td>${cols.map(c=>`<td class="r"><span class="v">${cell(totGen[c])}</span></td>`).join('')}<td class="r"><span class="v">${fmtFull(totGen.total)}</span></td></tr>`;
+  wrap.innerHTML=`<div class="gdet-wrap">
+    <div class="c-head" style="margin-bottom:10px">
+      <span class="c-title" style="font-size:15px">${esc(f)} · ${esc(mesLbl)} · detalle por cliente</span>
+      <span class="c-note">${rows.length} clientes · incl. Tránsito acumulado · sin NDC <button type="button" id="gdetClose" class="clear-btn" style="margin-left:8px">× Cerrar</button></span>
+    </div>
+    ${rows.length?`<div class="gdet-scroll"><table class="tbl gdet"><thead><tr>${head}</tr></thead><tbody>${body}${foot}</tbody></table></div>`
+    :`<div style="color:var(--mut);font-size:13px;padding:8px 0">Sin datos de ${esc(f)} en ${esc(mesLbl)}.</div>`}
+  </div>`;
+  wrap.querySelectorAll('tr[data-gcli]').forEach(tr=>{
+    tr.onclick=()=>{
+      const k=tr.dataset.gcli;
+      if(gaugeDetCliAbiertos.has(k))gaugeDetCliAbiertos.delete(k); else gaugeDetCliAbiertos.add(k);
+      renderGaugeDetalle(curMes);
+    };
+  });
+  const closeBtn=document.getElementById('gdetClose');
+  if(closeBtn)closeBtn.onclick=()=>{gaugeDetalleActivo=null;gaugeDetCliAbiertos.clear();renderGauges();};
+  wrap.querySelectorAll('th[data-gcol]').forEach(th=>{
+    th.onclick=()=>{
+      const c=th.dataset.gcol;
+      if(gaugeDetSortCol===c)gaugeDetSortDir=gaugeDetSortDir==='asc'?'desc':'asc';
+      else{gaugeDetSortCol=c;gaugeDetSortDir=c==='cli'?'asc':'desc';}
+      renderGaugeDetalle(curMes);
+    };
+  });
 }
 
 function renderGaugesDiario(){
   if(!MESES.length)return;
-  const curMes=MESES[MESES.length-1];
+  const curMes=MESES[MESES.length-1]; // AVANCE DIARIO: siempre el último mes con datos (criterio original)
   const [y,mo]=curMes.split('-').map(Number);
   // Día de corte dentro de curMes (el último mes con datos reales).
   // Antes se comparaba siempre contra "ayer" según la fecha real del sistema: si el
@@ -4470,29 +4640,18 @@ const urlCli  = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOB
   // gid incluido), así que hasta entonces esta fetch va a devolver vacío y el dashboard
   // sigue funcionando igual que antes, mostrando "Sin tipificar" en la tabla de detalle.
   const urlTipif = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=789004850&single=true&output=csv`;
-  // FECHAS_ACTUALIZADAS (archivo 175, 23/09/2026): solapa nueva que llena un Apps Script
-  // corriendo en la planilla (detecta cambios de ESTADO comparando la bajada de hoy contra
-  // la de ayer — ver el .gs en la carpeta del proyecto). Tolerante a fallos (igual que
-  // urlCli/urlNdc/urlTipif): si todavía no se publicó esta solapa, o está vacía porque el
-  // Apps Script recién se instaló y ningún remito cambió de estado todavía, el dashboard
-  // sigue funcionando exactamente igual que antes (todo por FECHA original, sin corrección).
-  const urlFechas = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOBkhPICKGZxEugGPjK5H8cXQsyeTVPHseewsb66T30k5BbdpwryyNRHUAwFOm_p_ND/pub?gid=1083351610&single=true&output=csv`;
   try {
-    const [resRem, resPend, resProd, resCli, resNdc, resTipif, resFechas] = await Promise.all([fetch(urlRem), fetch(urlPend), fetch(urlProd), fetch(urlCli).catch(()=>({ok:false,text:()=>''})), fetch(urlNdc).catch(()=>({ok:false,text:()=>''})), fetch(urlTipif).catch(()=>({ok:false,text:()=>''})), fetch(urlFechas).catch(()=>({ok:false,text:()=>''}))]);
+    const [resRem, resPend, resProd, resCli, resNdc, resTipif] = await Promise.all([fetch(urlRem), fetch(urlPend), fetch(urlProd), fetch(urlCli).catch(()=>({ok:false,text:()=>''})), fetch(urlNdc).catch(()=>({ok:false,text:()=>''})), fetch(urlTipif).catch(()=>({ok:false,text:()=>''}))]);
     if(!resRem.ok) throw new Error(`HTTP ${resRem.status}`);
-    const [textRem, textPend, textProd, textCli, textNdc, textTipif, textFechas] = await Promise.all([resRem.text(), resPend.text(), resProd.text(), resCli.ok?resCli.text():Promise.resolve(''), resNdc.ok?resNdc.text():Promise.resolve(''), resTipif.ok?resTipif.text():Promise.resolve(''), resFechas.ok?resFechas.text():Promise.resolve('')]);
+    const [textRem, textPend, textProd, textCli, textNdc, textTipif] = await Promise.all([resRem.text(), resPend.text(), resProd.text(), resCli.ok?resCli.text():Promise.resolve(''), resNdc.ok?resNdc.text():Promise.resolve(''), resTipif.ok?resTipif.text():Promise.resolve('')]);
     // Construir lookup de productos PRIMERO (para enriquecer remitos)
     if(resProd.ok&&textProd){const rowsProd=parseCsvText(textProd);if(rowsProd.length>0)processProductRows(rowsProd);}
     if(textCli){const rowsCli=parseCsvText(textCli);if(rowsCli.length>0)processClientRows(rowsCli);}
-    // FECHAS_ACTUALIZADAS tiene que procesarse ANTES de processRawRows(rowsRem,...) de abajo,
-    // porque processRawRows() ya consulta FECHA_REAL_POR_COMPROBANTE mientras arma "mes" por
-    // fila (archivo 175).
-    if(textFechas){const rowsFechas=parseCsvText(textFechas);if(rowsFechas.length>0)processFechasActualizadasRows(rowsFechas);}
     const rowsRem = parseCsvText(textRem);
     if(rowsRem.length===0) throw new Error('El sheet no devolvió datos');
     processRawRows(rowsRem, 'Google Sheets');
-    // processNdcRows() debe correr DESPUÉS de processRawRows (que resetea ORIG_AGG/
-    // ORIG_DAYAGG/EJEC_ROWS al principio) para que el neteo de NDC no se pierda.
+    // processNdcRows() debe correr DESPUÉS de processRawRows (que resetea ORIG_DAYAGG/EJEC_ROWS al
+    // principio) para que el neteo de NDC (AVANCE DIARIO y Seguimiento comerciales) no se pierda.
     if(textNdc){const rowsNdc=parseCsvText(textNdc);if(rowsNdc.length>0)processNdcRows(rowsNdc);}
     // processTipifRows() no depende de processNdcRows (solo llena TIPIF_BY_COMP, que se
     // consulta por número de comprobante recién al renderizar), pero se corre en el mismo
@@ -5094,3 +5253,41 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 178 - Dashboard ventas REM 2026 - usa columna nativa FEC. ACT. de Otecno para fecha real de cambio de estado: el usuario avisó (28/09/2026) que Otecno ya agregó a la bajada del ERP una columna nativa con la fecha real de la última actualización de estado de cada remito ("FEC. ACT.", columna E) y que él ya agregó esa misma columna a la solapa "VENTA REMITOS" del Google Sheets — y que, al probarlo, el dashboard se le rompió mostrando "Error al conectar: El sheet no devolvió datos". Antes de tocar código se investigó la causa real: se revisó todo processRawRows() y se confirmó que TODO el parseo de columnas es por nombre de encabezado (r['FECHA'], r['COMPROBANTE'], etc.), nunca por posición, así que insertar una columna nueva en el medio no debería romper nada por sí solo. Se analizó el archivo que el usuario subió ("REMS_DETS_PER_01-08-2026_A_27-09-2026.CSV", export crudo del ERP, delimitado por ";"), confirmando que "FEC. ACT." está en la posición 5 (entre ESTADO y PRODUCTO) con exactamente el mismo formato de fecha (DD/MM/AAAA) que FECHA — pero también un hallazgo importante: sobre esas 2.601 comprobantes únicos del export, la columna vino VACÍA en 2.586 (99%), y en los 15 casos con valor, coincidía siempre con FECHA (remitos creados el mismo día del corte) — los 54 remitos viejos en Tránsito (mayo-agosto) que eran el caso de uso original seguían con FEC. ACT. vacía, es decir que la columna todavía no parece ser retroactiva. Para el error puntual del "sheet no devolvió datos", se ubicó la única condición del código que lo dispara (`if(rowsRem.length===0) throw new Error('El sheet no devolvió datos')`, dentro del fetch a la solapa publicada) y se abrió el dashboard real (ncialone-data.github.io/ventaremitos/) en un navegador dentro de esta sesión: cargó sin problema, con "Google Sheets · 32.651 filas" y KPIs con valores normales, y se hizo un fetch directo a la URL publicada de "VENTA REMITOS" confirmando 32.651 filas con el header exacto de 20 columnas incluyendo "FEC. ACT." en la posición correcta. Conclusión: el error fue un problema de timing de "Publicar en la web" de Google (tarda en regenerar el CSV publicado después de pegar ~32.651 filas de una), no un problema de estructura de columnas ni de parseo — se le avisó esto al usuario ANTES de tocar ningún archivo, sin hacer cambios, tal como pidió. Con el visto bueno del usuario para avanzar igual con la mejora (aprovechando que la columna ya está disponible, aunque hoy venga casi siempre vacía), se implementó en esta v178 — partiendo de una copia exacta del archivo 176, nunca modificado — un esquema de prioridad de 3 niveles para calcular "mes"/"día" de cada línea dentro de processRawRows(): 1) columna nativa FEC. ACT. si trae un valor parseable (prioridad más alta, por ser la fuente más confiable y futura); 2) si no, FECHA_REAL_POR_COMPROBANTE (el mecanismo propio del archivo 175/176 vía Apps Script, hoy pausado y por lo tanto sin efecto real, pero se deja como respaldo intermedio — Caso C del archivo 177); 3) si ninguna de las 2 anteriores tiene dato, la columna FECHA de siempre. Para esto se extrajo la lógica de parseo de fecha (que antes vivía en línea dentro del for, sólo para FECHA) a una función reutilizable _parseFechaMesDay(s), ya que ahora hace falta aplicar el mismo parseo (ISO o DD/MM/AAAA, devolviendo null ante cualquier otro texto como "-" o vacío) a 2 columnas distintas por fila. El comportamiento de "fecha inválida" (skipped++) se preservó idéntico al original. No se tocó ningún otro cálculo, función, estilo ni fetch del archivo — el único cambio de código real es este bloque dentro de processRawRows(); todo lo demás (KPIs, gauges, Estado de remito, NDCs, pendientes, etc.) sigue exactamente igual que en el 176. Verificación: se corrió `node --check` sobre el JavaScript completo del archivo (sin errores de sintaxis). Dado que en los datos reales de hoy la columna FEC. ACT. viene casi siempre vacía, el efecto visible inmediato de este cambio es nulo (el dashboard sigue calculando exactamente igual que el 176, punto 3 de la prioridad) — el cambio queda listo para cuando Otecno empiece a completarla de forma más consistente, sin que haga falta tocar el dashboard de nuevo en ese momento. No se pudo probar en un navegador real con datos donde FEC. ACT. difiera de FECHA (no existen todavía en el Sheet real) — se recomienda al usuario confirmar, apenas Otecno empiece a completar la columna de forma más amplia, que el mes de algún remito puntual efectivamente cambie según lo esperado. Pedido 28/09/2026. -->
 <!-- - breve descripcion de lo hecho: se investigó primero (sin tocar nada) el error "El sheet no devolvió datos" que reportó el usuario tras agregar la columna FEC. ACT., confirmando que fue un problema pasajero de republicación de Google Sheets y no algo relacionado a la columna nueva ni al parseo del dashboard. Con eso aclarado, se implementó en processRawRows() el uso de la columna nativa FEC. ACT. (fecha real de cambio de estado que ahora entrega Otecno) para decidir a qué mes se atribuye la venta de cada remito, con este orden de prioridad: FEC. ACT. si tiene valor, si no el mecanismo propio ya existente (hoy inactivo), si no la FECHA de siempre — sin arriesgar nada, porque hoy esa columna viene vacía en el 99% de los casos y el fallback deja todo funcionando igual que antes. -->
+
+<!-- 181 - Dashboard ventas REM 2026 - elimina mecanismo Apps Script en desuso, solo FEC. ACT. y FECHA: el usuario, repasando cómo había quedado la v178, preguntó (28/09/2026) de dónde salía el "nivel intermedio" de la prioridad de fechas que mencioné en el chat (el mecanismo propio armado en los archivos 175/176 vía Apps Script + solapa FECHAS_ACTUALIZADAS) y confirmó que, como Otecno finalmente sí entregó el desarrollo de la columna nativa FEC. ACT., ese mecanismo de contención quedó en desuso — pidió generar esta versión eliminándolo por completo del código, dejando todo bien documentado y sin código muerto. Se partió del archivo 178 (nunca modificado) y se sacaron las 4 piezas que formaban ese mecanismo: (1) el comentario y la declaración `const FECHA_REAL_POR_COMPROBANTE={}` (vivía justo después de `PROD_LOOKUP`); (2) la función completa `processFechasActualizadasRows(rows)` con su comentario, que armaba ese lookup a partir de la solapa FECHAS_ACTUALIZADAS; (3) en el loader principal, el comentario y la constante `urlFechas` (fetch a esa solapa publicada), sacándola también de los 2 `Promise.all` (el de los fetch y el de los `.text()`) y de la llamada `processFechasActualizadasRows(rowsFechas)` que corría antes de `processRawRows()`; (4) dentro de `processRawRows()`, el punto 2 de la prioridad de 3 niveles que agregó la v178 (que consultaba ese lookup como respaldo cuando FEC. ACT. venía vacía) — la prioridad quedó en 2 niveles: FEC. ACT. si tiene valor parseable, si no la FECHA original de siempre, con el comentario reescrito para reflejar solo el mecanismo que sigue vivo (sin mencionar el mecanismo eliminado, ya documentado en el changelog de las versiones 175/176/178 más arriba en este mismo archivo para quien necesite el historial completo). No se tocó ningún otro cálculo, función, estilo ni fetch — todo lo demás (KPIs, gauges, Estado de remito, NDCs, pendientes, Ranking, etc.) sigue exactamente igual que en el 178. Los archivos 172/173/174 (el .gs del Apps Script) y el propio Google Sheet quedan sin cambios por esta versión — son historia aparte, ya documentada en el archivo 177, y no hace falta tocarlos porque la solapa FECHAS_ACTUALIZADAS que usaban ya se había eliminado del Sheet al pausar el proceso. Verificación: se corrió `node --check` sobre el JavaScript completo del archivo (sin errores de sintaxis); se corrió un `grep` sobre el archivo completo confirmando que ya no queda ninguna referencia a FECHA_REAL_POR_COMPROBANTE, processFechasActualizadasRows, urlFechas, resFechas ni textFechas fuera de los comentarios de changelog de versiones anteriores (que se conservan como historial, igual criterio que ya se usaba en el archivo 176 para no reescribir el pasado); y se comparó con `diff` contra el archivo 178 confirmando que los únicos cambios de código real son exactamente esas 4 eliminaciones más la simplificación del bloque de prioridad de fechas — nada más se tocó. Pedido 28/09/2026. -->
+<!-- - breve descripcion de lo hecho: se eliminó del código el mecanismo de respaldo vía Apps Script (FECHA_REAL_POR_COMPROBANTE, processFechasActualizadasRows, el fetch a la solapa FECHAS_ACTUALIZADAS) que había quedado en desuso porque Otecno ya entregó la columna nativa FEC. ACT. — el cálculo de fecha real de cambio de estado quedó simplificado a 2 niveles (FEC. ACT. si tiene valor, si no FECHA de siempre), sin código muerto ni referencias colgando a la solapa que ya no existe en el Sheet. -->
+
+<!-- 182 - Dashboard ventas REM 2026 - cumplimiento mensual por fabrica con detalle desplegable por cliente: el usuario pidió (08/10/2026) que en "Cumplimiento por fábrica - MENSUAL", al hacer clic en cualquiera de los medidores o de las tarjetas con el nombre de cada grupo de venta (BARMAN, GRAFICA, TUBOS, VYMAT, TERCEROS), se despliegue justo debajo, a todo el ancho de la sección, un listado con lo que compone el total de esa tarjeta, con columnas CLIENTE, FIRMADA, INGRESADA, REPARTO, TOTAL, y que si hubiera más tipos de remito también aparezcan como columnas, más una representación gráfica. Se consultaron 4 decisiones antes de tocar código (multiple choice) y se respondió: (1) cuadre con el total: los medidores no son venta bruta de remitos — incluyen Tránsito y vienen neteados con notas de crédito/débito (ORIG_AGG recibe los NCR/NDB desde processNdcRows) — así que se agregaron las columnas TRANSITO y NDC por cliente, para que la fila "Total general" del listado coincida EXACTO con el número de la tarjeta; (2) gráfico: una dona arriba del listado con los clientes de total positivo (top 8 + "Otros"), con leyenda de monto y porcentaje, y tooltip por segmento; (3) comportamiento: una sola fábrica abierta a la vez (clic en otra reemplaza el listado, clic en la misma o en "× Cerrar" lo cierra), con la fábrica seleccionada resaltada; (4) orden: ordenable al clic en cada encabezado, arranca por TOTAL descendente (CLIENTE arranca ascendente), con flecha ▲/▼ en la columna activa. Implementación: (a) nuevo arreglo ORIG_CLI_ROWS [{orig,mes,cli,estado,vta}], que se llena en los dos únicos lugares donde ya se llenaba ORIG_AGG — processRawRows() (remitos, con su estado real y el cliente crudo con código, el mismo mes ya resuelto por FEC. ACT./FECHA) y processNdcRows() (_applyOrig, estado 'NDC', cliente de la nota) — y se vacía junto con el resto al arrancar processRawRows(); como suma exactamente lo mismo que ORIG_AGG, la reconciliación es exacta por construcción; (b) renderGauges() ahora marca medidores y tarjetas como clickeables (clase gauge-clic, data-fab) y llama a la nueva renderGaugeDetalle(curMes), que agrupa por cliente y estado, arma las columnas FIRMADA/INGRESADA/REPARTO/TRANSITO fijas + cualquier estado extra que aparezca en los datos + NDC + TOTAL, dibuja la dona en SVG sin librerías, y la tabla con scroll horizontal si hace falta; (c) nuevo contenedor <div id="gaugesDetalle"> dentro de la tarjeta gaugesCard y bloque de CSS (.gauge-clic, .gdet-*); el nombre de cliente se escapa antes de insertarse en el HTML. Importante, no es un cambio de cálculo: ningún total, medidor ni sección existente cambia (en especial no se tocó la diferencia de corte entre AVANCE DIARIO y MENSUAL explicada el 06/10/2026, ni el estado "Pagada", que sigue fuera de los medidores igual que antes). Verificación: node --check sin errores; prueba en jsdom ejecutando el código real del archivo con un dataset sintético (todos los estados, remito con FEC. ACT. de otro mes, notas de crédito y débito, cliente con caracteres < & >): la suma de ORIG_CLI_ROWS coincide con getOrigVta() en las 5 fábricas, el listado muestra las columnas y totales esperados, el orden por encabezado, el reemplazo entre fábricas, el cierre al segundo clic y el caso de fábrica sin datos funcionan. No se pudo probar en un navegador real con los datos productivos dentro de esta sesión (el archivo es local y el navegador integrado no abre archivos locales): conviene que el usuario lo abra y confirme que la fila "Total general" de cada fábrica coincide con el monto de su tarjeta. Pedido 08/10/2026. -->
+<!-- - breve descripcion de lo hecho: en "Cumplimiento por fábrica - MENSUAL", al hacer clic en un medidor o tarjeta de fábrica se despliega debajo, a todo el ancho, una dona con los clientes principales y un listado por cliente (FIRMADA, INGRESADA, REPARTO, TRANSITO, NDC, TOTAL, ordenable por encabezado) cuya fila de total coincide exacta con el número de la tarjeta; una fábrica abierta a la vez, clic de nuevo la cierra. -->
+
+
+<!-- 183 - v183 desde 182: (a) se quita la dona, la leyenda y el centro de la dona del detalle por cliente del cumplimiento MENSUAL; solo queda la tabla al hacer clic en el medidor o tarjeta; (b) los clientes se agrupan por razón social: se elimina el código numérico de punto de venta y se unifican todos los códigos del mismo cliente sumando importes (el Total general sigue igual al medidor); (c) la sección "Estado de remito" se mueve debajo de las tarjetas KPI principales, antes de Notas de Crédito / Débito. -->
+<!-- - breve descripcion de lo hecho: detalle por cliente agrupado por razon social, sin dona, y Estado de remito subido bajo los KPIs -->
+
+
+<!-- 184 - v184 desde 183: la sección "Estado de remito" ahora tiene detalle desplegable por cliente. Al hacer clic en la tarjetita de un estado (Firmada, Ingresada, Reparto, Tránsito, Anulada...) se despliega, debajo de las tarjetas, un listado de clientes agrupados por razón social (se quita el código numérico de punto de venta y se unifican los puntos de venta del mismo cliente), con columnas CLIENTE, REMITOS (comprobantes únicos), IMPORTE y % DEL ESTADO, fila Total general y encabezados ordenables al clic. Respeta los mismos filtros que las tarjetas (período, grupo de empresa, empresa y rubro); es venta bruta sin NDC. Nuevo acumulador ESTCLI_ROWS (se llena en processRawRows junto con agg). Reutiliza los estilos .gdet y .gauge-clic de la v182. Clic en la misma tarjeta o en "× Cerrar" lo cierra. -->
+<!-- - breve descripcion de lo hecho: Estado de remito con listado desplegable por cliente agrupado por razon social y ordenable -->
+
+
+<!-- 185 - v185 desde 184: en el detalle por cliente de "Cumplimiento por fábrica - MENSUAL", al hacer clic en cualquier renglón de cliente se despliegan debajo los productos de esa fábrica (BARMAN, GRAFICA, TUBOS, VYMAT o TERCEROS) comprados por ese cliente en el mes, con las mismas columnas de estado (Firmada, Ingresada, Reparto, Tránsito, NDC) y TOTAL; productos ordenados de mayor a menor total, la suma coincide con la fila del cliente. Se pueden desplegar varios clientes a la vez; otro clic en el cliente lo pliega. Al cerrar o cambiar de fábrica se pliegan todos. ORIG_CLI_ROWS ahora guarda también el nombre del producto (prod), tanto desde remitos como desde NDC. -->
+<!-- - breve descripcion de lo hecho: productos desplegables al hacer clic en cada cliente del detalle de cumplimiento mensual por fabrica -->
+
+
+<!-- 186 - v186 desde 185: renombre de las tarjetas KPI superiores (pedido del usuario, para evitar confusión): "Venta activa" (1ra, con NDCs, data-card=ventaNdc) pasa a "Venta activa comercial"; "Venta activa" (2da, sin NDCs e incl. Tránsito acumulado, data-card=ventaSinNdc) pasa a "Venta activa gerencia"; "Clientes únicos" pasa a "Clientes activos" y se elimina su leyenda "en remitos activos". Solo cambian textos (también el título del listado de Clientes activos); los cálculos, ids y data-card no se tocaron. -->
+<!-- - breve descripcion de lo hecho: tarjetas KPI renombradas a Venta activa comercial, Venta activa gerencia y Clientes activos (sin leyenda) -->
+
+
+<!-- 187 - v187 desde 186: "Estado de remito" alineado con la tarjeta "Venta activa gerencia". (1) El Tránsito de la tarjeta y de su listado por cliente pasa a ser el ACUMULADO de todos los meses (respeta empresa/rubro, ignora el mes), igual que gerencia; Firmada, Ingresada y Reparto siguen el mes filtrado (mes por FEC. ACT., o FECHA si está vacía). (2) Anulada, Pagada u otros estados se muestran atenuados con borde punteado y "no suma en venta activa", fuera de totales y porcentajes. (3) Nueva tarjeta final "Venta activa" = Firmada + Ingresada + Reparto + Tránsito acumulado, que coincide con Venta activa gerencia. Los porcentajes ahora son sobre ese total. Cumplimiento por fábrica NO se modificó (pendiente de definir). -->
+<!-- - breve descripcion de lo hecho: Estado de remito con Transito acumulado, Anulada fuera del total y tarjeta Venta activa que coincide con gerencia -->
+
+
+<!-- 188 - v188 desde 187: se elimina la tarjeta "Venta activa" agregada al final de "Estado de remito" en la v187 (pedido del usuario). Se mantiene todo lo demás de la v187: Tránsito acumulado, Anulada/Pagada atenuadas fuera del total, porcentajes sobre la venta activa. -->
+<!-- - breve descripcion de lo hecho: elimina la tarjeta Venta activa de Estado de remito -->
+
+
+<!-- 189 - v189 desde 188: "Cumplimiento por fábrica - MENSUAL" y "- AVANCE DIARIO" pasan al criterio de la tarjeta "Venta activa gerencia". (1) Venta bruta: ya no se descuentan notas de crédito/débito (se elimina su aplicación a los medidores y la columna NDC del listado por cliente; NDC sigue en su sección y en Seguimiento comerciales). (2) Cuentan Firmada + Ingresada + Reparto del mes (FEC. ACT., o FECHA si está vacía) y TODO el Tránsito acumulado de cualquier mes; en el AVANCE DIARIO lo vendido llega hasta el día de corte (ayer) y el Tránsito entra completo. (3) Respetan los filtros de mes, empresa/grupo y rubro del tablero (los objetivos mensuales no se escalan por empresa). (4) Productos con ORIGEN = PROPIO ya no quedan fuera: se mira PROVEEDOR (columna G de "listado productos"): contiene BARMAN → BARMAN, TUBOS (ej. FABRICA DE TUBOS) → TUBOS, VYMAT → VYMAT, cualquier otro → TERCEROS (los MANTEL siguen yendo a GRAFICA). Así los 5 medidores suman exactamente la tarjeta Venta activa gerencia. Código: ORIG_AGG/ORIG_DAYAGG eliminados; ORIG_CLI_ROWS (con emp, rub y día) es la única fuente; helpers resolverOrigen, gaugeRowCuenta, gaugeMesSel; PROV_LOOKUP nuevo. -->
+<!-- - breve descripcion de lo hecho: cumplimiento por fabrica mensual y diario con criterio de venta activa gerencia (transito acumulado, sin NDC, filtros) y PROPIO resuelto por proveedor -->
+
+
+<!-- 190 - v190 desde 189: "Cumplimiento por fábrica - AVANCE DIARIO" vuelve a procesar como antes de la v189: último mes con datos, todas las empresas, sin filtros, Tránsito del mes (no acumulado) y neto de notas de crédito/débito (ORIG_DAYAGG restaurado, y las NDC vuelven a netear el diario). "Cumplimiento por fábrica - MENSUAL" queda EXACTAMENTE como en la v189 (criterio Venta activa gerencia: Tránsito acumulado, sin NDC, filtros de mes/empresa/rubro). Ambos usan la misma clasificación de fábrica de la v189 (resolverOrigen: los PROPIO se asignan por proveedor, confirmado por el usuario). -->
+<!-- - breve descripcion de lo hecho: avance diario restaurado al criterio anterior a la v189; mensual sin cambios -->

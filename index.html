@@ -423,7 +423,8 @@ svg{display:block;width:100%;overflow:visible}
   <div id="pendientesDetalleWrap"></div>
 </div>
 
-<div class="card" style="margin-bottom:14px" id="gaugesCardDiario">
+<!-- v191: sección oculta a pedido del usuario (display:none). El código y los datos se conservan; para volver a mostrarla alcanza con quitar "display:none;" del style de este div. -->
+<div class="card" style="display:none;margin-bottom:14px" id="gaugesCardDiario">
   <div class="c-head" style="margin-bottom:6px">
     <span class="c-title">Cumplimiento por fábrica - AVANCE DIARIO</span>
     <span class="c-note" id="gaugesNoteDiario">actualizá los datos para cargar</span>
@@ -5291,3 +5292,7 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 190 - v190 desde 189: "Cumplimiento por fábrica - AVANCE DIARIO" vuelve a procesar como antes de la v189: último mes con datos, todas las empresas, sin filtros, Tránsito del mes (no acumulado) y neto de notas de crédito/débito (ORIG_DAYAGG restaurado, y las NDC vuelven a netear el diario). "Cumplimiento por fábrica - MENSUAL" queda EXACTAMENTE como en la v189 (criterio Venta activa gerencia: Tránsito acumulado, sin NDC, filtros de mes/empresa/rubro). Ambos usan la misma clasificación de fábrica de la v189 (resolverOrigen: los PROPIO se asignan por proveedor, confirmado por el usuario). -->
 <!-- - breve descripcion de lo hecho: avance diario restaurado al criterio anterior a la v189; mensual sin cambios -->
+
+
+<!-- 191 - v191 desde 190: se OCULTA la sección "Cumplimiento por fábrica - AVANCE DIARIO" (display:none en #gaugesCardDiario) a pedido del usuario, porque los distintos criterios de suma confundían más de lo que aclaraban. Queda visible "Cumplimiento por fábrica - MENSUAL" (criterio Venta activa gerencia). No se borró código: para restaurarla se quita "display:none;" del div. -->
+<!-- - breve descripcion de lo hecho: oculta la seccion Cumplimiento por fabrica AVANCE DIARIO, MENSUAL sin cambios -->

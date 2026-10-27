@@ -399,6 +399,7 @@ svg{display:block;width:100%;overflow:visible}
   <div id="estadoDiarioWrap" style="margin-top:16px"></div>
 </div>
 
+
 <div class="card" style="margin-bottom:14px">
   <div class="c-head" style="margin-bottom:10px">
     <span class="c-title">Notas de Crédito / Débito</span>
@@ -423,8 +424,7 @@ svg{display:block;width:100%;overflow:visible}
   <div id="pendientesDetalleWrap"></div>
 </div>
 
-<!-- v191: sección oculta a pedido del usuario (display:none). El código y los datos se conservan; para volver a mostrarla alcanza con quitar "display:none;" del style de este div. -->
-<div class="card" style="display:none;margin-bottom:14px" id="gaugesCardDiario">
+<div class="card" style="margin-bottom:14px" id="gaugesCardDiario">
   <div class="c-head" style="margin-bottom:6px">
     <span class="c-title">Cumplimiento por fábrica - AVANCE DIARIO</span>
     <span class="c-note" id="gaugesNoteDiario">actualizá los datos para cargar</span>
@@ -437,6 +437,7 @@ svg{display:block;width:100%;overflow:visible}
     <div style="text-align:center;padding:8px"><div class="k-lbl">—</div></div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px" id="infoRowDiario"></div>
+  <div id="gaugesDetalleDiario"></div>
 </div>
 
 <div class="card" style="margin-bottom:14px" id="gaugesCard">
@@ -940,7 +941,7 @@ function render(){
   const ndcCardTot=ndcNetForMonth(ndcMesKey,{skipRubroSafety:true});
   const ndcScopeTxt=(empFilter||'todas las empresas')+(rubFilter?' · no se filtra por rubro (la solapa NDC no tiene rubro)':'');
   const ndcNoteEl=document.getElementById('ndcNote');
-  if(ndcNoteEl)ndcNoteEl.textContent=`${(ndcCardTot.ncrCount+ndcCardTot.ndbCount).toLocaleString('es-AR')} notas · ${MLBL[ndcMesKey]||ndcMesKey}`;
+  if(ndcNoteEl)ndcNoteEl.textContent=`${(ndcCardTot.ncrCount+ndcCardTot.ndbCount).toLocaleString('es-AR')} notas · ${MLBL[ndcMesKey]||ndcMesKey} · imputadas al mes de la venta de su remito`+(NDC_SIN_REMITO.n?` · ${NDC_SIN_REMITO.n} notas (${fmtFull(NDC_SIN_REMITO.monto)}) sin remito de venta en la hoja, no aplicadas`:'');
   const kpisNdcEl=document.getElementById('kpisNdc');
   if(kpisNdcEl){
     // Importe COMPLETO (fmtFull), no abreviado — pedido 04/08/2026: las tarjetas de totales
@@ -973,6 +974,7 @@ function render(){
   renderEstados(R,R.reduce((s,d)=>s+d.v,0));
   renderEstadoDiario();
   renderGauges();        // Cumplimiento por fábrica MENSUAL sigue mes/empresa/rubro filtrados (archivo 189)
+  renderGaugesDiario();  // AVANCE DIARIO visible otra vez, sigue mes/empresa/rubro (archivo 196)
   renderMix(R,totalVta);
   renderMatrix();
   if(PEND_RAW)calcPendientesFiltered();
@@ -1677,8 +1679,8 @@ function processRawRows(rawRows, sourceName) {
   FAM_ROWS.length=0;
   ESTREM_ROWS.length=0;
   KPIVTA_ROWS.length=0;
-  for(const k in ORIG_DAYAGG)delete ORIG_DAYAGG[k];
   ORIG_CLI_ROWS.length=0;
+  for(const k in REM_FECHA)delete REM_FECHA[k];
   ESTCLI_ROWS.length=0;
   const _seenComp=new Set();
   // _parseFechaMesDay (v178, 28/09/2026): parsea un string de fecha (ISO "AAAA-MM-DD..." o
@@ -1734,9 +1736,9 @@ function processRawRows(rawRows, sourceName) {
       // NUEVO — pedido 05/09/2026: detalle día a día para la tarjeta "Venta activa · sin
       // NDCs" (vista diaria/mensual). A diferencia del bloque de ESTREM_ROWS más abajo, este
       // SÍ incluye Tránsito, y guarda cada estado por separado (sin fundir Firmada+Ingresada).
-      KPIVTA_ROWS.push({mes,day:dayNum,emp,rub,estado,cliente:cli,vta});
+      KPIVTA_ROWS.push({mes,day:dayNum,emp,rub,estado,cliente:cli,vta,mesO:_fd.mes}); // mesO = mes de la FECHA de creación (archivo 198)
       // DAYAGG alimenta el KPI "vs. mes anterior": ya NO contempla Transito (pedido 29/07/2026).
-      // Los gauges por fábrica (ORIG_CLI_ROWS/ORIG_DAYAGG) y Seguimiento comerciales (EJEC_ROWS), más
+      // Los gauges por fábrica (ORIG_CLI_ROWS) y Seguimiento comerciales (EJEC_ROWS), más
       // abajo en este mismo bloque, siguen incluyendo Transito sin cambios.
       if(estado!=='Transito'){
         if(!DAYAGG[mes])DAYAGG[mes]={};
@@ -1758,11 +1760,12 @@ function processRawRows(rawRows, sourceName) {
       }
       // Fábrica del producto (ver resolverOrigen) → detalle para "Cumplimiento por fábrica".
       // Se guarda cada fila con empresa, rubro y día para respetar los filtros del tablero.
-      const _orig=resolverOrigen(_pcode,_prodNombre);
-      ORIG_CLI_ROWS.push({orig:_orig,mes,emp,rub,cli:rawcli,estado,vta,prod:_prodNombre});
-      if(!ORIG_DAYAGG[_orig])ORIG_DAYAGG[_orig]={};
-      if(!ORIG_DAYAGG[_orig][mes])ORIG_DAYAGG[_orig][mes]={};
-      ORIG_DAYAGG[_orig][mes][dayNum]=(ORIG_DAYAGG[_orig][mes][dayNum]||0)+vta;
+      // Cumplimiento por fábrica (archivo 196): sólo lo que suma en "Venta activa comercial" (Firmada +
+      // Ingresada + Reparto, sin Tránsito). Cada fila lleva empresa, rubro, mes y día para filtros/corte.
+      if(estado!=='Transito'){
+        ORIG_CLI_ROWS.push({orig:resolverOrigen(_pcode,_prodNombre),mes,day:dayNum,emp,rub,cli:rawcli,estado,vta,prod:_prodNombre});
+        if(comp&&!REM_FECHA[comp])REM_FECHA[comp]={mes,day:dayNum,cli:rawcli};
+      }
       // Acumular por día+producto para sección UTILIDAD AYER
       const _ejec=String(r['EJECUTIVO']||r['VENDEDOR']||'').trim();
       const _rawcli=String(r['CLIENTE']||'').trim();
@@ -2011,24 +2014,25 @@ const FAM_ALLOWLIST_NEG=new Set([...FAM_ALLOWLIST,'RESIMAX']);
 const FAM_ROWS=[]; // filas activas por familia de producto: {mes,familia,emp,rub,vta,cos,estado}
 const CLIENT_LOOKUP={}; // { codigoCliente → ejecutivo }
 const CLIENT_NAME_LOOKUP={}; // { nombreNormalizado → ejecutivo } — para cruzar por razón social (ej: pendientes)
-// ORIG_CLI_ROWS (archivo 182, reformulado en 189): [{orig,mes,day,emp,rub,cli,estado,vta,prod}] — una fila
-// por línea de remito en estado Firmada/Ingresada/Reparto/Tránsito, con su fábrica (resolverOrigen),
-// el mes/día según FEC. ACT. (o FECHA si está vacía), empresa, rubro, cliente y producto. Es la ÚNICA
-// fuente de "Cumplimiento por fábrica" (medidores MENSUAL y AVANCE DIARIO y su listado por cliente).
-// Criterio igual a la tarjeta "Venta activa gerencia": venta bruta (sin descontar NDC), Firmada +
-// Ingresada + Reparto del mes y TODO el Tránsito acumulado (de cualquier mes), con los filtros de
-// empresa/rubro (ver gaugeRowCuenta).
-// ORIG_DAYAGG (restaurado en 190): { FÁBRICA: { MES: { DIA: vta } } } — alimenta SOLO "Cumplimiento por
-// fábrica - AVANCE DIARIO", con su criterio original (anterior a la v189): último mes con datos, todas
-// las empresas, sin filtros, remitos Firmada/Ingresada/Reparto/Tránsito del mes (por FEC. ACT./FECHA)
-// NETOS de notas de crédito/débito. La fábrica se clasifica con resolverOrigen() (PROPIO por proveedor).
-const ORIG_DAYAGG={};
+// ORIG_CLI_ROWS (archivo 182, reformulado en 196): [{orig,mes,day,emp,rub,cli,estado,vta,prod}] — una fila por
+// línea de remito Firmada/Ingresada/Reparto (SIN Tránsito) más una fila por cada nota de crédito/débito
+// (estado 'NDC'), con su fábrica (resolverOrigen), el mes/día de la venta (FEC. ACT., o FECHA si está
+// vacía; las NDC heredan el de su remito), empresa, rubro, cliente y producto. Es la ÚNICA fuente de
+// "Cumplimiento por fábrica" (medidores MENSUAL y AVANCE DIARIO y sus listados por cliente). Criterio
+// igual a la tarjeta "Venta activa comercial" (ver gaugeRowCuenta).
 const ESTCLI_ROWS=[]; let estadoDetActivo=null; let estDetSortCol='total'; let estDetSortDir='desc'; // detalle por cliente de "Estado de remito" (archivo 184)
 const ORIG_CLI_ROWS=[];
-let gaugeDetalleActivo=null; // fábrica con el listado desplegado (null = ninguna). Una sola a la vez.
-let gaugeDetSortCol='total'; // columna de orden del listado: 'cli' | clave de estado | 'total'
-let gaugeDetSortDir='desc';
-let gaugeDetCliAbiertos=new Set(); // clientes con productos desplegados (archivo 185) // 'asc' | 'desc'
+// Estado del listado desplegable por cliente de cada fila de medidores (archivos 182/185; 196 lo extiende
+// al AVANCE DIARIO): active = fábrica abierta (null = ninguna, una sola a la vez), open = clientes con
+// productos desplegados, sortCol 'cli' | estado | 'total', sortDir 'asc' | 'desc'.
+const GDET={
+  M:{active:null,open:new Set(),sortCol:'total',sortDir:'desc',wrapId:'gaugesDetalle',closeId:'gdetClose',nombre:'MENSUAL'},
+  D:{active:null,open:new Set(),sortCol:'total',sortDir:'desc',wrapId:'gaugesDetalleDiario',closeId:'gdetCloseD',nombre:'AVANCE DIARIO'}
+};
+// REM_FECHA: { comprobante → {mes,day,cli} } de los remitos que cuentan como venta comercial (Firmada/
+// Ingresada/Reparto), con el mes/día de su FEC. ACT. (o FECHA si está vacía). Las NDC se imputan ahí
+// (archivo 196). NDC_SIN_REMITO: notas que no se aplican porque su remito no cuenta en la hoja de remitos.
+const REM_FECHA={}; const NDC_SIN_REMITO={n:0,monto:0};
 const FABRICAS_GAUGE=['BARMAN','GRAFICA','TUBOS','VYMAT','TERCEROS'];
 let famAnualSortCol='util'; let famAnualSortDir='desc'; // orden tabla "Utilidad anual por familias de productos"
 let famNegActiveFamilia=null; // familia con el listado de clientes <60% util desplegado (una sola a la vez) — "Utilidad negativa de clientes por familias de productos"
@@ -2470,27 +2474,26 @@ function makeGaugeSVG(pct){
 // Mes que muestran los medidores de "Cumplimiento por fábrica": el mes filtrado arriba o, si no hay
 // ninguno, el último mes con datos (archivo 189).
 function gaugeMesSel(){return mesFilter||MESES[MESES.length-1];}
-// ¿La fila de ORIG_CLI_ROWS cuenta para la fábrica/mes? (archivo 189) Mismo criterio que la tarjeta
-// "Venta activa gerencia": respeta empresa/grupo/rubro; el Tránsito cuenta SIEMPRE (acumulado, de
-// cualquier mes); el resto de los estados (Firmada/Ingresada/Reparto) sólo los del mes elegido.
-function gaugeRowCuenta(r,orig,mes){
-  if(r.orig!==orig)return false;
+// ¿La fila de ORIG_CLI_ROWS cuenta para la fábrica/mes? (archivo 196) Mismo criterio que la tarjeta
+// "Venta activa comercial": Firmada + Ingresada + Reparto del mes (FEC. ACT. o FECHA) SIN Tránsito, y las
+// notas de crédito/débito (estado 'NDC') imputadas al mes/día de su remito. Respeta empresa/grupo y
+// rubro (las NDC no tienen rubro: con un rubro filtrado no se aplican, igual que en la tarjeta). Si se
+// pasa diaMax, sólo cuenta hasta ese día del mes inclusive (avance diario).
+function gaugeRowCuenta(r,orig,mes,diaMax){
+  if(r.orig!==orig||r.mes!==mes)return false;
   if(empGrupoFilter&&!(EMP_GRUPOS[empGrupoFilter]||[]).includes(r.emp))return false;
   if(empFilter&&r.emp!==empFilter)return false;
-  if(rubFilter&&r.rub!==rubFilter)return false;
-  if(r.estado==='Transito')return true;
-  return r.mes===mes;
+  if(r.estado==='NDC'){ if(rubFilter)return false; }
+  else if(rubFilter&&r.rub!==rubFilter)return false;
+  return diaMax==null||r.day<=diaMax;
 }
-// Venta de una fábrica en un mes (venta bruta + Tránsito acumulado)
+// Venta de una fábrica en un mes (Firmada+Ingresada+Reparto neta de NDC)
 function getOrigVta(orig, mes){
   return ORIG_CLI_ROWS.reduce((s,r)=>gaugeRowCuenta(r,orig,mes)?s+r.vta:s,0);
 }
-// Venta de una fábrica en un mes, sumada solo hasta un día del mes (inclusive) — para avance diario
-// (criterio original, ORIG_DAYAGG: neto de NDC, Tránsito del mes, sin filtros; ver ORIG_DAYAGG).
+// Ídem hasta un día del mes (inclusive) — para avance diario
 function getOrigVtaHastaDia(orig, mes, diaMax){
-  const byDay=ORIG_DAYAGG[orig]&&ORIG_DAYAGG[orig][mes];
-  if(!byDay||diaMax<=0)return 0;
-  return Object.entries(byDay).filter(([d])=>+d<=diaMax).reduce((s,[,v])=>s+v,0);
+  return ORIG_CLI_ROWS.reduce((s,r)=>gaugeRowCuenta(r,orig,mes,diaMax)?s+r.vta:s,0);
 }
 
 // ============================================================================
@@ -2544,31 +2547,29 @@ function parseFechaNdc(fechaRaw){
 function processNdcRows(rawRows){
   for(const k in NDC_MES_AGG) delete NDC_MES_AGG[k];
   NDC_DETAIL.ncr.length=0; NDC_DETAIL.ndb.length=0;
+  NDC_SIN_REMITO.n=0; NDC_SIN_REMITO.monto=0;
   const EL_NDC={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
   const _n=s=>{const t=String(s||'').trim();return parseFloat(t.replace(/\./g,'').replace(',','.'))||0;}; // AR
   const seenNcr=new Set(), seenDb=new Set();
   let ncrRows=0, ndbRows=0, excluidasRows=0;
   for(const r of rawRows){
-    // FECHA REMITO viene con un punto final (ej: "01/07/2026."), a diferencia de la solapa
-    // principal — se lo quita antes de parsear dd/mm/yyyy.
-    const fechaRaw=String(r['FECHA REMITO']||'').trim().replace(/\.+$/,'');
-    const p=fechaRaw.split('/');
-    if(p.length<3) continue;
-    const y=p[2].length===4?p[2]:`20${p[2]}`;
-    const mo=p[1].padStart(2,'0');
-    const mes=`${y}-${mo}`;
-    const dia=parseInt(p[0])||1;
+    // Mes/día de la nota (archivo 196): el de la venta de su remito (FEC. ACT. o FECHA), buscado por número
+    // de remito en la hoja de remitos — así venta y nota caen SIEMPRE en el mismo mes. Si el remito no
+    // cuenta como venta comercial (no está en la hoja o está en Tránsito/Anulada/Pagada) la nota no se
+    // aplica (se informa en la tarjeta de Notas).
+    const remKey=String(r['REMITO']||'').trim();
+    const ref=REM_FECHA[remKey];
+    const mes=ref?ref.mes:null, dia=ref?ref.day:null;
     const idNcr=String(r['ID_NCR']||'').trim();
     const idDb=String(r['ID_DB']||'').trim();
     if(!idNcr && !idDb) continue; // línea sin ninguna nota vinculada
     const emp=EL_NDC[String(r['EMPRESA']||'').trim()]||String(r['EMPRESA']||'').trim();
     const cliRaw=String(r['CLIENTE']||'').trim();
-    // NDC en AVANCE DIARIO (restaurado en 190): netea ORIG_DAYAGG como antes de la v189 (MENSUAL no las usa)
-    const _origNdc=resolverOrigen(String(r['PRODUCTO']||'').trim().split(/\s+/)[0].toUpperCase(),String(r['PRODUCTO']||'').trim());
-    const _applyOrig=(monto)=>{
-      if(!ORIG_DAYAGG[_origNdc]) ORIG_DAYAGG[_origNdc]={}; if(!ORIG_DAYAGG[_origNdc][mes]) ORIG_DAYAGG[_origNdc][mes]={};
-      ORIG_DAYAGG[_origNdc][mes][dia]=(ORIG_DAYAGG[_origNdc][mes][dia]||0)+monto;
-    };
+    const _pn=String(r['PRODUCTO']||'').trim();
+    const _origNdc=resolverOrigen(_pn.split(/\s+/)[0].toUpperCase(),_pn);
+    // fila para Cumplimiento por fábrica (detalle por cliente) — sólo si hay remito de referencia
+    const _applyOrig=(monto)=>{ ORIG_CLI_ROWS.push({orig:_origNdc,mes,day:dia,emp,rub:null,cli:(ref&&ref.cli)||cliRaw,estado:'NDC',vta:monto,prod:_pn}); };
+    const _sinRem=(monto)=>{ NDC_SIN_REMITO.n++; NDC_SIN_REMITO.monto+=monto; };
     const _ensureMes=()=>{ if(!NDC_MES_AGG[mes]) NDC_MES_AGG[mes]={}; if(!NDC_MES_AGG[mes][emp]) NDC_MES_AGG[mes][emp]={ncrTotal:0,ncrCount:0,ndbTotal:0,ndbCount:0}; };
     if(idNcr && !seenNcr.has(idNcr)){
       seenNcr.add(idNcr);
@@ -2584,6 +2585,7 @@ function processNdcRows(rawRows){
         excluidasRows++;
       } else {
         const monto=_n(r['NETO NCR']); // ya viene negativo
+        if(!ref){ _sinRem(monto); } else {
         _ensureMes();
         NDC_MES_AGG[mes][emp].ncrTotal+=monto; NDC_MES_AGG[mes][emp].ncrCount++;
         _applyOrig(monto);
@@ -2592,20 +2594,23 @@ function processNdcRows(rawRows){
         // remito original — pedido 04/08/2026 (confirmado con el usuario, multiple choice).
         NDC_DETAIL.ncr.push({numero:notaCredTxt||idNcr, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NCR']), importe:monto, mes, emp});
         ncrRows++;
+        }
       }
     }
     if(idDb && !seenDb.has(idDb)){
       seenDb.add(idDb);
       const monto=_n(r['NETO NDB']); // ya viene positivo
+      if(!ref){ _sinRem(monto); } else {
       _ensureMes();
       NDC_MES_AGG[mes][emp].ndbTotal+=monto; NDC_MES_AGG[mes][emp].ndbCount++;
       _applyOrig(monto);
       EJEC_ROWS.push({mes,rawcli:cliRaw,emp,rub:null,vta:monto,cos:0,estado:'NDC'});
       NDC_DETAIL.ndb.push({numero:String(r['NOTA DE DEBITO']||'').trim()||idDb, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NDB']), importe:monto, mes, emp});
       ndbRows++;
+      }
     }
   }
-  console.log(`NDC: ${ncrRows} notas de crédito y ${ndbRows} notas de débito procesadas (deduplicadas por ID_NCR/ID_DB); ${excluidasRows} NCR(D) excluidas.`);
+  console.log(`NDC: ${ncrRows} notas de crédito y ${ndbRows} notas de débito aplicadas (deduplicadas por ID_NCR/ID_DB); ${excluidasRows} NCR(D) excluidas; ${NDC_SIN_REMITO.n} sin remito de venta comercial (no se aplican).`);
 }
 
 // ============================================================================
@@ -3034,8 +3039,9 @@ function kpiVentaRowsFiltradas(){
   return r;
 }
 const _campoEstado=e=>e==='Firmada'?'firmada':e==='Ingresada'?'ingresada':e==='Reparto'?'reparto':'transito';
-const _mkEstadoRow=()=>({firmada:0,ingresada:0,reparto:0,transito:0});
-const _totEstadoRow=r=>r.firmada+r.ingresada+r.reparto+r.transito;
+// anterior (archivo 198): importe de remitos creados en meses anteriores al mes filtrado (columna MESES ANTERIORES)
+const _mkEstadoRow=()=>({firmada:0,ingresada:0,reparto:0,transito:0,anterior:0});
+const _totEstadoRow=r=>r.firmada+r.ingresada+r.reparto+r.transito+(r.anterior||0);
 const KEY_OTROS_MESES='__OTROS_MESES__'; // pseudo-clave de día para la fila "Tránsito de otros meses"
 
 function computeVentaSinNdcDiario(){
@@ -3064,7 +3070,8 @@ function computeVentaSinNdcDiario(){
     if(!dentroDelMes) return;
     const dayKey=`${d.mes}|${d.day}`;
     if(!dias[dayKey])dias[dayKey]={mes:d.mes,day:d.day,tot:_mkEstadoRow(),clientes:{}};
-    const campo=_campoEstado(d.estado);
+    // Archivo 198: con mes elegido, remitos CREADOS en meses anteriores (FECHA < mes filtrado) van a MESES ANTERIORES
+    const campo=(mesFilter&&d.mesO&&d.mesO<mesFilter)?'anterior':_campoEstado(d.estado);
     dias[dayKey].tot[campo]+=d.vta;
     if(!dias[dayKey].clientes[d.cliente])dias[dayKey].clientes[d.cliente]=_mkEstadoRow();
     dias[dayKey].clientes[d.cliente][campo]+=d.vta;
@@ -3124,7 +3131,7 @@ function computeVentaSoloTransito(){
 // Fila de "día" genérica (real o la especial de "Tránsito de otros meses") — misma
 // estructura de columnas y mismo mecanismo de expandir/colapsar (data-daykey), para no
 // duplicar el marcado y evitar el tipo de desalineación de columnas que tuvimos antes.
-function _filaDiaHtml(key,label,tot,clientesMap,{especial=false,ocultarTransito=false}={}){
+function _filaDiaHtml(key,label,tot,clientesMap,{especial=false,ocultarTransito=false,conAnterior=false}={}){
   const open=kpiDiaVtaActivas.has(key);
   const cel=(v)=>`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px">${v?fmtFull(v):'—'}</td>`;
   const celCli=(v)=>`<td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px">${v?fmtFull(v):'—'}</td>`;
@@ -3138,12 +3145,12 @@ function _filaDiaHtml(key,label,tot,clientesMap,{especial=false,ocultarTransito=
   const clienteRows=open?clientesList.map(c=>`<tr style="border-bottom:1px solid var(--line)">
     <td></td>
     <td class="cli-nm" style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
-    ${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${ocultarTransito?'':celCli(c.transito)}
+    ${conAnterior?celCli(c.anterior):''}${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${ocultarTransito?'':celCli(c.transito)}
     <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600">${fmtFull(c.total)}</td>
   </tr>`).join(''):'';
   return `<tr data-daykey="${key}" style="cursor:pointer;border-bottom:1px solid var(--line);${especial?'font-style:italic;color:var(--mut2);':''}${open?'background:rgba(96,165,250,.08)':''}">
     <td colspan="2" style="padding:6px 8px;font-size:12px;font-weight:600">${open?'▾':'▸'} ${label}</td>
-    ${cel(tot.firmada)}${cel(tot.ingresada)}${cel(tot.reparto)}${ocultarTransito?'':cel(tot.transito)}
+    ${conAnterior?cel(tot.anterior):''}${cel(tot.firmada)}${cel(tot.ingresada)}${cel(tot.reparto)}${ocultarTransito?'':cel(tot.transito)}
     <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700">${fmtFull(_totEstadoRow(tot))}</td>
   </tr>${clienteRows}`;
 }
@@ -3178,12 +3185,13 @@ function renderVentaSinNdcDiariaBody(){
     return `<div style="font-size:12px;color:var(--mut)">Sin datos para este período/filtro.</div>`;
   }
   const fmtDay=k=>{const[mes,day]=k.split('|');return `${day.toString().padStart(2,'0')}-${(MLBL[mes]||mes)}`;};
+  const conAnterior=!!mesFilter; // columna MESES ANTERIORES sólo con un mes elegido (archivo 198)
   const totGen=_mkEstadoRow();
   const rowsHtml=dayKeys.map(k=>{
     const d=dias[k];
     totGen.firmada+=d.tot.firmada; totGen.ingresada+=d.tot.ingresada;
-    totGen.reparto+=d.tot.reparto; totGen.transito+=d.tot.transito;
-    return _filaDiaHtml(k,fmtDay(k),d.tot,d.clientes,{ocultarTransito:kpiVentaSinTransito});
+    totGen.reparto+=d.tot.reparto; totGen.transito+=d.tot.transito; totGen.anterior+=d.tot.anterior;
+    return _filaDiaHtml(k,fmtDay(k),d.tot,d.clientes,{ocultarTransito:kpiVentaSinTransito,conAnterior});
   }).join('');
   // Fila especial de "Tránsito de otros meses": ahora TAMBIÉN se puede plegar/desplegar
   // (pedido 05/09/2026) y muestra el listado de clientes con su total al abrirla, igual que
@@ -3191,27 +3199,34 @@ function renderVentaSinNdcDiariaBody(){
   // Con el switch "Sin tránsito" activo (archivo 145) transitoOtrosMeses siempre da 0 (se
   // excluye desde computeVentaSinNdcDiario()), así que esta fila directamente no se renderiza
   // — desaparece de la lista, tal como se pidió.
+  // Archivo 198: con mes elegido, el Tránsito de otros meses va a la columna MESES ANTERIORES de esta fila.
+  const _oc=v=>conAnterior?{firmada:0,ingresada:0,reparto:0,transito:0,anterior:v}:{firmada:0,ingresada:0,reparto:0,transito:v};
   const filaOtrosMeses=transitoOtrosMeses>0
-    ?_filaDiaHtml(KEY_OTROS_MESES,'Tránsito de otros meses',{firmada:0,ingresada:0,reparto:0,transito:transitoOtrosMeses},
-        Object.fromEntries(Object.entries(clientesOtrosMeses).map(([c,v])=>[c,{firmada:0,ingresada:0,reparto:0,transito:v}])),
-        {especial:true})
+    ?_filaDiaHtml(KEY_OTROS_MESES,'Tránsito de otros meses',_oc(transitoOtrosMeses),
+        Object.fromEntries(Object.entries(clientesOtrosMeses).map(([c,v])=>[c,_oc(v)])),
+        {especial:true,conAnterior})
     :'';
-  totGen.transito+=transitoOtrosMeses;
+  if(conAnterior)totGen.anterior+=transitoOtrosMeses; else totGen.transito+=transitoOtrosMeses;
   // Sin scroll interno (pedido 05/09/2026): la tabla crece con el contenido, sin
   // max-height/overflow-y — igual criterio que ya se usa en "Estado de remito" (archivo 125).
   // Switch "Sin tránsito" (pedido 10/09/2026, archivo 145): además de excluir los datos (ya
   // resuelto en computeVentaSinNdcDiario()), se saca la columna TRANSITO por completo de la
   // tabla (colgroup/encabezado/pie) en vez de dejarla vacía — el 12% que le correspondía se le
   // suma a la columna FECHA (12%→38%... ver colgroup) para que las columnas sigan sumando 100%.
-  const colgroupHtml=kpiVentaSinTransito
-    ?`<col style="width:12%"><col style="width:38%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:10%">`
-    :`<col style="width:12%"><col style="width:26%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:10%">`;
+  const colgroupHtml=conAnterior
+    ?(kpiVentaSinTransito
+      ?`<col style="width:9%"><col style="width:25%"><col style="width:14%"><col style="width:15%"><col style="width:12%"><col style="width:13%"><col style="width:12%">`
+      :`<col style="width:9%"><col style="width:19%"><col style="width:14%"><col style="width:14%"><col style="width:11%"><col style="width:12%"><col style="width:12%"><col style="width:9%">`)
+    :(kpiVentaSinTransito
+      ?`<col style="width:12%"><col style="width:38%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:10%">`
+      :`<col style="width:12%"><col style="width:26%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:10%">`);
   const thTransito=kpiVentaSinTransito?'':'<th style="padding:5px 8px;text-align:right;font-weight:600">TRANSITO</th>';
   const tdTransitoTot=kpiVentaSinTransito?'':`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.transito)}</td>`;
   return `<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
       <colgroup>${colgroupHtml}</colgroup>
       <thead><tr style="border-bottom:1px solid var(--line2)">
         <th colspan="2" style="padding:5px 8px;text-align:left;font-weight:600">FECHA</th>
+        ${conAnterior?'<th style="padding:5px 8px;text-align:right;font-weight:600" title="Remitos creados en meses anteriores al mes filtrado">MESES ANTERIORES</th>':''}
         <th style="padding:5px 8px;text-align:right;font-weight:600">FIRMADA</th>
         <th style="padding:5px 8px;text-align:right;font-weight:600">INGRESADA</th>
         <th style="padding:5px 8px;text-align:right;font-weight:600">REPARTO</th>
@@ -3221,6 +3236,7 @@ function renderVentaSinNdcDiariaBody(){
       <tbody>${rowsHtml}${filaOtrosMeses}</tbody>
       <tfoot><tr style="border-top:2px solid var(--line2);font-weight:700">
         <td colspan="2" style="padding:6px 8px">Total general</td>
+        ${conAnterior?`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.anterior)}</td>`:''}
         <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.firmada)}</td>
         <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ingresada)}</td>
         <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.reparto)}</td>
@@ -4160,13 +4176,13 @@ function renderGauges(){
     const obj=GAUGE_OBJETIVOS[f]||0;
     const actual=getOrigVta(f,curMes);
     const pctCol2=actual>=obj?'var(--teal)':'#f87171';
-    return `<div class="gauge-clic${gaugeDetalleActivo===f?' on':''}" data-fab="${f}" title="Clic para ver el detalle por cliente" style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
+    return `<div class="gauge-clic${GDET.M.active===f?' on':''}" data-fab="${f}" title="Clic para ver el detalle por cliente" style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
       <div style="font-size:10px;color:var(--mut2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;font-weight:600">${f}</div>
       <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Objetivo: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(obj)}</span></div>
       <div style="font-size:11px;color:var(--mut)">Venta: <span style="font-family:'IBM Plex Mono',monospace;color:${pctCol2}">${fmtM(actual)}</span></div>
     </div>`;
   }).join('');
-  document.getElementById('gaugesNote').textContent=`${MLBL[curMes]||curMes}${empGrupoFilter?' · '+empGrupoFilter:''}${empFilter?' · '+empFilter:''}${rubFilter?' · '+rubFilter:''} · incl. Tránsito acumulado · sin NDC · clic en un medidor o tarjeta para ver el detalle por cliente`;
+  document.getElementById('gaugesNote').textContent=`${MLBL[curMes]||curMes}${empGrupoFilter?' · '+empGrupoFilter:''}${empFilter?' · '+empFilter:''}${rubFilter?' · '+rubFilter:''} · sin Tránsito · con NDC · clic en un medidor o tarjeta para ver el detalle por cliente`;
   // Gauges
   const grid=document.getElementById('gaugesGrid');
   grid.innerHTML=FABRICAS_GAUGE.map(f=>{
@@ -4175,7 +4191,7 @@ function renderGauges(){
     const pct=obj>0?actual/obj:0;
     const pctDisp=(pct*100).toFixed(1);
     const col=pct<0.4?'#f87171':pct<0.7?'#fb923c':pct<0.85?'#facc15':'#4ade80';
-    return `<div class="gauge-clic${gaugeDetalleActivo===f?' on':''}" data-fab="${f}" title="Clic para ver el detalle por cliente" style="text-align:center;padding:6px 4px">
+    return `<div class="gauge-clic${GDET.M.active===f?' on':''}" data-fab="${f}" title="Clic para ver el detalle por cliente" style="text-align:center;padding:6px 4px">
       <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:13px;letter-spacing:.08em;margin-bottom:2px">${f}</div>
       ${makeGaugeSVG(pct)}
       <div style="font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:${col};margin-top:2px;line-height:1">${pctDisp}%</div>
@@ -4187,101 +4203,101 @@ function renderGauges(){
   // clic en otra reemplaza el listado, clic en la misma lo cierra.
   document.querySelectorAll('#gaugesGrid [data-fab],#infoRow [data-fab]').forEach(el=>{
     el.onclick=()=>{
-      gaugeDetalleActivo=(gaugeDetalleActivo===el.dataset.fab)?null:el.dataset.fab;
-      gaugeDetCliAbiertos.clear();
+      GDET.M.active=(GDET.M.active===el.dataset.fab)?null:el.dataset.fab;
+      GDET.M.open.clear();
       renderGauges();
     };
   });
-  renderGaugeDetalle(curMes);
+  renderGaugeDetalle('M',curMes);
 }
 
-// renderGaugeDetalle (archivo 182, 08/10/2026): listado desplegable de "Cumplimiento por
-// fábrica - MENSUAL" con lo que compone el total de la fábrica seleccionada, por cliente.
-// Columnas: CLIENTE, FIRMADA, INGRESADA, REPARTO, TRANSITO, TOTAL. Sale de ORIG_CLI_ROWS con el mismo
-// criterio que el medidor (gaugeRowCuenta: venta bruta sin NDC, Tránsito acumulado, filtros de
-// mes/empresa/rubro) — por eso la fila "Total general" coincide exacto con el número de la tarjeta.
-// Agrupa por razón social (sin el código numérico de punto de venta) y no lleva gráfico.
-// Se puede ordenar al clic en cada encabezado (gaugeDetSortCol/gaugeDetSortDir).
-function renderGaugeDetalle(curMes){
-  const wrap=document.getElementById('gaugesDetalle');
+// renderGaugeDetalle (archivo 182, generalizado en 196): listado desplegable por cliente de una fila de
+// medidores — k = 'M' (Cumplimiento por fábrica - MENSUAL) o 'D' (AVANCE DIARIO, hasta el día de corte
+// diaMax). Columnas: CLIENTE, FIRMADA, INGRESADA, REPARTO, NDC, TOTAL (sin Tránsito). Sale de ORIG_CLI_ROWS
+// con el mismo criterio que el medidor (gaugeRowCuenta), por eso "Total general" coincide con la tarjeta.
+// Agrupa por razón social (sin código de punto de venta); clic en un cliente despliega sus productos;
+// ordenable al clic en cada encabezado.
+function renderGaugeDetalle(k,curMes,diaMax){
+  const C=GDET[k];
+  const wrap=document.getElementById(C.wrapId);
   if(!wrap)return;
-  const f=gaugeDetalleActivo;
+  const f=C.active;
   if(!f){wrap.innerHTML='';return;}
+  const rerender=()=>{ if(k==='M')renderGauges(); else renderGaugesDiario(); };
   const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   // 1) Agrupar por cliente y estado
   const byCli={};
-  const BASE=['Firmada','Ingresada','Reparto','Transito'];
+  const cols=['Firmada','Ingresada','Reparto','NDC']; // estados que suman (sin Tránsito) + notas de crédito/débito
   for(const r of ORIG_CLI_ROWS){
-    if(!gaugeRowCuenta(r,f,curMes))continue;
+    if(!gaugeRowCuenta(r,f,curMes,diaMax))continue;
     // razón social sin el código numérico de punto de venta (ej: "340132 CENTRAPAL SRL" y
     // "340139 CENTRAPAL SRL" → una sola fila). La clave ignora mayúsculas, acentos y espacios repetidos.
     const nom=String(r.cli||'').replace(/^\s*\d+\s*[-.:]?\s*/,'').replace(/\s+/g,' ').trim()||'(sin cliente)';
-    const k=nom.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
-    if(!byCli[k])byCli[k]={cli:nom,vals:{},total:0,prods:{}};
+    const kk=nom.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    if(!byCli[kk])byCli[kk]={cli:nom,vals:{},total:0,prods:{}};
     const pn=String(r.prod||'').replace(/\s+/g,' ').trim()||'(sin producto)';
-    const pr=byCli[k].prods[pn]||(byCli[k].prods[pn]={name:pn,vals:{},total:0});
+    const pr=byCli[kk].prods[pn]||(byCli[kk].prods[pn]={name:pn,vals:{},total:0});
     pr.vals[r.estado]=(pr.vals[r.estado]||0)+r.vta; pr.total+=r.vta;
-    byCli[k].vals[r.estado]=(byCli[k].vals[r.estado]||0)+r.vta;
-    byCli[k].total+=r.vta;
+    byCli[kk].vals[r.estado]=(byCli[kk].vals[r.estado]||0)+r.vta;
+    byCli[kk].total+=r.vta;
   }
-  const cols=BASE; // columnas = estados que suman (venta bruta, sin NDC)
   const rows=Object.values(byCli);
   const mesLbl=(MLBL[curMes]||curMes);
   const totGen={total:0}; cols.forEach(c=>totGen[c]=0);
   rows.forEach(r=>{cols.forEach(c=>totGen[c]+=(r.vals[c]||0)); totGen.total+=r.total;});
   // 2) Orden
-  const dir=gaugeDetSortDir==='asc'?1:-1;
+  const dir=C.sortDir==='asc'?1:-1;
   rows.sort((a,b)=>{
-    if(gaugeDetSortCol==='cli')return dir*a.cli.localeCompare(b.cli,'es');
-    const va=gaugeDetSortCol==='total'?a.total:(a.vals[gaugeDetSortCol]||0);
-    const vb=gaugeDetSortCol==='total'?b.total:(b.vals[gaugeDetSortCol]||0);
+    if(C.sortCol==='cli')return dir*a.cli.localeCompare(b.cli,'es');
+    const va=C.sortCol==='total'?a.total:(a.vals[C.sortCol]||0);
+    const vb=C.sortCol==='total'?b.total:(b.vals[C.sortCol]||0);
     return dir*(va-vb)||a.cli.localeCompare(b.cli,'es');
   });
   // 3) Tabla
-  const lbl=c=>c.toUpperCase();
-  const arrow=c=>gaugeDetSortCol===c?(gaugeDetSortDir==='asc'?' ▲':' ▼'):'';
+  const arrow=c=>C.sortCol===c?(C.sortDir==='asc'?' ▲':' ▼'):'';
   const cell=v=>(v&&Math.round(v)!==0)?fmtFull(v):'—';
-  const head=`<th data-gcol="cli">CLIENTE${arrow('cli')}</th>`+cols.map(c=>`<th class="r" data-gcol="${c}">${lbl(c)}${arrow(c)}</th>`).join('')+`<th class="r" data-gcol="total">TOTAL${arrow('total')}</th>`;
+  const head=`<th data-gcol="cli">CLIENTE${arrow('cli')}</th>`+cols.map(c=>`<th class="r" data-gcol="${c}">${c.toUpperCase()}${arrow(c)}</th>`).join('')+`<th class="r" data-gcol="total">TOTAL${arrow('total')}</th>`;
   const kOf=r=>r.cli.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
   const body=rows.map(r=>{
-    const k=kOf(r), open=gaugeDetCliAbiertos.has(k);
-    let h=`<tr class="gdet-cli${open?' open':''}" data-gcli="${esc(k)}" title="clic para ver los productos de ${esc(r.cli)}"><td class="cl"><span class="gdet-chev">${open?'▾':'▸'}</span>${esc(r.cli)}</td>${cols.map(c=>`<td class="r"><span class="v">${cell(r.vals[c])}</span></td>`).join('')}<td class="r"><span class="v" style="font-weight:600">${fmtFull(r.total)}</span></td></tr>`;
+    const kk=kOf(r), open=C.open.has(kk);
+    let h=`<tr class="gdet-cli${open?' open':''}" data-gcli="${esc(kk)}" title="clic para ver los productos de ${esc(r.cli)}"><td class="cl"><span class="gdet-chev">${open?'▾':'▸'}</span>${esc(r.cli)}</td>${cols.map(c=>`<td class="r"><span class="v">${cell(r.vals[c])}</span></td>`).join('')}<td class="r"><span class="v" style="font-weight:600">${fmtFull(r.total)}</span></td></tr>`;
     if(open){
       h+=Object.values(r.prods).sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name,'es')).map(pr=>`<tr class="gdet-prod"><td class="cl" title="${esc(pr.name)}">${esc(pr.name)}</td>${cols.map(c=>`<td class="r"><span class="v">${cell(pr.vals[c])}</span></td>`).join('')}<td class="r"><span class="v">${fmtFull(pr.total)}</span></td></tr>`).join('');
     }
     return h;
   }).join('');
   const foot=`<tr class="gdet-tot"><td>Total general</td>${cols.map(c=>`<td class="r"><span class="v">${cell(totGen[c])}</span></td>`).join('')}<td class="r"><span class="v">${fmtFull(totGen.total)}</span></td></tr>`;
+  const corte=(k==='D'&&diaMax!=null)?` · hasta el día ${diaMax}`:'';
   wrap.innerHTML=`<div class="gdet-wrap">
     <div class="c-head" style="margin-bottom:10px">
-      <span class="c-title" style="font-size:15px">${esc(f)} · ${esc(mesLbl)} · detalle por cliente</span>
-      <span class="c-note">${rows.length} clientes · incl. Tránsito acumulado · sin NDC <button type="button" id="gdetClose" class="clear-btn" style="margin-left:8px">× Cerrar</button></span>
+      <span class="c-title" style="font-size:15px">${esc(f)} · ${esc(mesLbl)}${corte} · detalle por cliente</span>
+      <span class="c-note">${rows.length} clientes · sin Tránsito · con NDC <button type="button" id="${C.closeId}" class="clear-btn" style="margin-left:8px">× Cerrar</button></span>
     </div>
     ${rows.length?`<div class="gdet-scroll"><table class="tbl gdet"><thead><tr>${head}</tr></thead><tbody>${body}${foot}</tbody></table></div>`
-    :`<div style="color:var(--mut);font-size:13px;padding:8px 0">Sin datos de ${esc(f)} en ${esc(mesLbl)}.</div>`}
+    :`<div style="color:var(--mut);font-size:13px;padding:8px 0">Sin datos de ${esc(f)} en ${esc(mesLbl)}${corte}.</div>`}
   </div>`;
   wrap.querySelectorAll('tr[data-gcli]').forEach(tr=>{
     tr.onclick=()=>{
-      const k=tr.dataset.gcli;
-      if(gaugeDetCliAbiertos.has(k))gaugeDetCliAbiertos.delete(k); else gaugeDetCliAbiertos.add(k);
-      renderGaugeDetalle(curMes);
+      const kk=tr.dataset.gcli;
+      if(C.open.has(kk))C.open.delete(kk); else C.open.add(kk);
+      renderGaugeDetalle(k,curMes,diaMax);
     };
   });
-  const closeBtn=document.getElementById('gdetClose');
-  if(closeBtn)closeBtn.onclick=()=>{gaugeDetalleActivo=null;gaugeDetCliAbiertos.clear();renderGauges();};
+  const closeBtn=document.getElementById(C.closeId);
+  if(closeBtn)closeBtn.onclick=()=>{C.active=null;C.open.clear();rerender();};
   wrap.querySelectorAll('th[data-gcol]').forEach(th=>{
     th.onclick=()=>{
       const c=th.dataset.gcol;
-      if(gaugeDetSortCol===c)gaugeDetSortDir=gaugeDetSortDir==='asc'?'desc':'asc';
-      else{gaugeDetSortCol=c;gaugeDetSortDir=c==='cli'?'asc':'desc';}
-      renderGaugeDetalle(curMes);
+      if(C.sortCol===c)C.sortDir=C.sortDir==='asc'?'desc':'asc';
+      else{C.sortCol=c;C.sortDir=c==='cli'?'asc':'desc';}
+      renderGaugeDetalle(k,curMes,diaMax);
     };
   });
 }
 
 function renderGaugesDiario(){
   if(!MESES.length)return;
-  const curMes=MESES[MESES.length-1]; // AVANCE DIARIO: siempre el último mes con datos (criterio original)
+  const curMes=gaugeMesSel(); // mes filtrado arriba o, sin filtro, el último con datos (archivo 196)
   const [y,mo]=curMes.split('-').map(Number);
   // Día de corte dentro de curMes (el último mes con datos reales).
   // Antes se comparaba siempre contra "ayer" según la fecha real del sistema: si el
@@ -4311,7 +4327,7 @@ function renderGaugesDiario(){
     const objEsperado=objDiario*diasLaborales;
     const actual=getOrigVtaHastaDia(f,curMes,diaCorte);
     const pctCol2=actual>=objEsperado?'var(--teal)':'#f87171';
-    return `<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
+    return `<div class="gauge-clic${GDET.D.active===f?' on':''}" data-fabd="${f}" title="Clic para ver el detalle por cliente" style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
       <div style="font-size:10px;color:var(--mut2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;font-weight:600">${f}</div>
       <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Objetivo: <span style="font-family:'IBM Plex Mono',monospace;color:var(--teal)">${fmtM(obj)}</span></div>
       <div style="font-size:11px;color:var(--mut);margin-bottom:1px">Días hábiles del mes: <span style="font-family:'IBM Plex Mono',monospace;color:var(--tx)">${diasLaboralesMes}</span></div>
@@ -4324,6 +4340,7 @@ function renderGaugesDiario(){
   document.getElementById('gaugesNoteDiario').textContent=mesCerrado
     ? `${MLBL[curMes]||curMes} completo · ${diasLaborales} días hábiles`
     : (diaCorte>0?`día ${diaCorte} de ${MLBL[curMes]||curMes} · ${diasLaborales} días hábiles transcurridos`:'sin días hábiles transcurridos aún');
+  document.getElementById('gaugesNoteDiario').textContent+=`${empGrupoFilter?' · '+empGrupoFilter:''}${empFilter?' · '+empFilter:''}${rubFilter?' · '+rubFilter:''} · sin Tránsito · con NDC · clic en un medidor o tarjeta para ver el detalle por cliente`;
   const gridD=document.getElementById('gaugesGridDiario');
   gridD.innerHTML=FABRICAS_GAUGE.map(f=>{
     const objDiario=(GAUGE_OBJETIVOS[f]||0)/(diasLaboralesMes||22);
@@ -4332,13 +4349,21 @@ function renderGaugesDiario(){
     const pct=objEsperado>0?actual/objEsperado:0;
     const pctDisp=(pct*100).toFixed(1);
     const col=pct<0.4?'#f87171':pct<0.7?'#fb923c':pct<0.85?'#facc15':'#4ade80';
-    return `<div style="text-align:center;padding:6px 4px">
+    return `<div class="gauge-clic${GDET.D.active===f?' on':''}" data-fabd="${f}" title="Clic para ver el detalle por cliente" style="text-align:center;padding:6px 4px">
       <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:13px;letter-spacing:.08em;margin-bottom:2px">${f}</div>
       ${makeGaugeSVG(pct)}
       <div style="font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:${col};margin-top:2px;line-height:1">${pctDisp}%</div>
       <div style="font-size:11px;color:var(--mut);margin-top:4px">${fmtFull(actual)} / ${fmtFull(objEsperado)}</div>
     </div>`;
   }).join('');
+  document.querySelectorAll('#gaugesGridDiario [data-fabd],#infoRowDiario [data-fabd]').forEach(el=>{
+    el.onclick=()=>{
+      GDET.D.active=(GDET.D.active===el.dataset.fabd)?null:el.dataset.fabd;
+      GDET.D.open.clear();
+      renderGaugesDiario();
+    };
+  });
+  renderGaugeDetalle('D',curMes,diaCorte);
 }
 
 function processClientRows(rawRows){
@@ -4651,7 +4676,7 @@ const urlCli  = `https://docs.google.com/spreadsheets/d/e/2PACX-1vQso2UGt8oBIwOB
     const rowsRem = parseCsvText(textRem);
     if(rowsRem.length===0) throw new Error('El sheet no devolvió datos');
     processRawRows(rowsRem, 'Google Sheets');
-    // processNdcRows() debe correr DESPUÉS de processRawRows (que resetea ORIG_DAYAGG/EJEC_ROWS al
+    // processNdcRows() debe correr DESPUÉS de processRawRows (que resetea ORIG_CLI_ROWS/REM_FECHA/EJEC_ROWS al
     // principio) para que el neteo de NDC (AVANCE DIARIO y Seguimiento comerciales) no se pierda.
     if(textNdc){const rowsNdc=parseCsvText(textNdc);if(rowsNdc.length>0)processNdcRows(rowsNdc);}
     // processTipifRows() no depende de processNdcRows (solo llena TIPIF_BY_COMP, que se
@@ -5296,3 +5321,22 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 191 - v191 desde 190: se OCULTA la sección "Cumplimiento por fábrica - AVANCE DIARIO" (display:none en #gaugesCardDiario) a pedido del usuario, porque los distintos criterios de suma confundían más de lo que aclaraban. Queda visible "Cumplimiento por fábrica - MENSUAL" (criterio Venta activa gerencia). No se borró código: para restaurarla se quita "display:none;" del div. -->
 <!-- - breve descripcion de lo hecho: oculta la seccion Cumplimiento por fabrica AVANCE DIARIO, MENSUAL sin cambios -->
+
+
+<!-- 192 - v192 desde 191: nueva sección "VENTA COMERCIAL CONSOLIDADA" (debajo de Cumplimiento por fábrica - MENSUAL). Pedido del usuario: contabilizar cada remito en el mes de su FECHA (mes de gesta) aunque su FEC. ACT. (entrega/último cambio de estado) caiga en un mes posterior; ej. remito de septiembre entregado en octubre suma en SEPTIEMBRE. Decisiones (multiple choice): (1) filas = un cliente por fila (razón social, sin código de punto de venta) con remitos desplegables al clic; (2) mes = el filtro de mes de arriba (aplicado sobre el mes de FECHA; sin mes elegido muestra todos); (3) columnas CLIENTE, FECHA / REMITOS, FIRMADA, INGRESADA, REPARTO, TRANSITO, NDC, FEC. ACT., TOTAL VENTA, con NDC aparte y TOTAL neto; las NDC se vinculan al remito por su número (columna REMITO de la solapa NDC, ~91% de las notas del sheet encuentran su remito; las demás pertenecen a remitos no presentes en la solapa de remitos y no se muestran); (4) respeta empresa/grupo y rubro (con rubro filtrado las NDC no se aplican porque no tienen rubro). Al desplegar un cliente aparece cada remito con FECHA, comprobante, importes por estado, NDC, FEC. ACT. ("sin cambio" si está vacía; resaltada con ↗ si cae en otro mes) y total. Encabezados ordenables. Un resumen arriba indica cuánto del total corresponde a remitos que cambiaron de estado en un mes posterior. Código: arrays CONS_ROWS (processRawRows, mes de FECHA sin el override de FEC. ACT.) y CONS_NDC (processNdcRows, neto por remito), función renderConsolidada(), reutiliza estilos .gdet. No se modificó ninguna otra sección ni cálculo. -->
+<!-- - breve descripcion de lo hecho: nueva seccion VENTA COMERCIAL CONSOLIDADA por mes de origen del remito con clientes desplegables, NDC y FEC. ACT. -->
+
+
+<!-- 193 - v193 desde 192: VENTA COMERCIAL CONSOLIDADA (pedido del usuario): (1) la sección se mueve justo debajo de "Estado de remito"; (2) pasa a ser una tarjeta resumen a todo el ancho (siempre visible) con Remitos, Firmadas, Ingresadas, Reparto, Tránsito, NDC y Venta neta; (3) el listado por cliente sólo se despliega al hacer clic en la sección (título, resumen o chevron), y ahora scrollea dentro de una caja de alto máximo 68vh con los ENCABEZADOS FIJOS (position:sticky) para no perderlos de vista al bajar. Resto sin cambios: criterio de mes de origen por FECHA, NDC por remito, filtros, orden por encabezado y remitos desplegables por cliente. -->
+<!-- - breve descripcion de lo hecho: venta comercial consolidada bajo estado de remito, tarjeta resumen con listado desplegable y encabezados fijos -->
+
+
+<!-- 196 - v196 desde 193: (1) "Cumplimiento por fábrica - AVANCE DIARIO" vuelve a estar VISIBLE (se había ocultado en la v191) y, junto con "- MENSUAL", pasa a calcular como la tarjeta "Venta activa comercial": Firmada + Ingresada + Reparto del mes (FEC. ACT., o FECHA si está vacía) SIN Tránsito y NETO de notas de crédito/débito; así la suma de los 5 medidores del mensual coincide con esa tarjeta. Decisiones (multiple choice): respetan los filtros de mes/empresa/rubro (con un rubro filtrado las NDC no se aplican, igual que en la tarjeta) y el avance diario corta en AYER (día de corte y días hábiles como siempre). (2) Criterio de NDC cambiado en TODO el tablero (tarjeta comercial, tarjetas de Notas de Crédito/Débito, detalle de notas, Seguimiento comerciales y medidores): cada nota se imputa al mes/día de la venta de su remito (FEC. ACT., o FECHA si está vacía), buscado por número de remito, en vez del mes de creación del remito; así venta y nota caen siempre en el mismo mes. Las notas cuyo remito no cuenta como venta comercial (no está en la hoja, o está en Tránsito/Anulada/Pagada) no se aplican y se informa cuántas son (y su importe) en la tarjeta de Notas. La sección VENTA COMERCIAL CONSOLIDADA sigue usando CONS_NDC por número de remito, sin cambios. (3) El listado desplegable por cliente (con productos al clic de cada cliente) ahora existe en AMBAS filas de medidores; columnas CLIENTE, FIRMADA, INGRESADA, REPARTO, NDC y TOTAL (se quita la columna TRANSITO); el del diario muestra lo acumulado hasta el día de corte. Código: ORIG_DAYAGG eliminado; ORIG_CLI_ROWS (con día) es la única fuente, y trae las NDC como filas de estado NDC; nuevo REM_FECHA (comprobante → mes/día/cliente de la venta) y objeto GDET con el estado de cada listado; renderGaugeDetalle(k,mes,diaMax) generalizado. Verificado en jsdom con datos sintéticos (remito de otro mes entregado este mes con su NDC, NDC sin remito y de Tránsito, filtros de empresa y rubro): medidores = tarjeta comercial en todos los casos. -->
+<!-- - breve descripcion de lo hecho: cumplimiento por fabrica mensual y diario visibles, atados a venta activa comercial (sin transito, con NDC por mes de la venta del remito) y detalle por cliente en ambos -->
+
+
+<!-- 197 - v197 desde 196: se ELIMINA por completo la sección "VENTA COMERCIAL CONSOLIDADA" (pedido del usuario: sus importes, ubicados por FECHA de creación del remito y con Tránsito, no coincidían con la tarjeta "Venta activa comercial", ubicada por FEC. ACT. y sin Tránsito, y generaban confusión). Se quitan la tarjeta HTML, sus estilos (.cons-*), los acumuladores CONS_ROWS/CONS_NDC, la función renderConsolidada() y sus llamadas. No cambia ningún otro cálculo: Cumplimiento por fábrica MENSUAL y AVANCE DIARIO, Estado de remito, KPIs y notas de crédito/débito quedan igual que en la v196. -->
+<!-- - breve descripcion de lo hecho: elimina la seccion VENTA COMERCIAL CONSOLIDADA, resto igual que la 196 -->
+
+<!-- 198 - v198 desde 197: en el listado diario de la tarjeta "Venta activa gerencia" se agrega la columna MESES ANTERIORES justo a continuación de FECHA. Con un mes elegido, reúne todos los remitos creados en meses anteriores (FECHA < mes filtrado), incluido el Tránsito acumulado de otros meses (fila especial, estados en "—"); FIRMADA/INGRESADA/REPARTO/TRANSITO quedan sólo con remitos creados en el mes filtrado. TOTAL = MESES ANTERIORES + estados, y el Total general sigue coincidiendo con la tarjeta. Sin mes elegido la columna no se muestra. KPIVTA_ROWS guarda mesO (mes de FECHA). No se tocan las demás vistas. -->
+<!-- - breve descripcion de lo hecho: columna MESES ANTERIORES en el listado diario de Venta activa gerencia -->

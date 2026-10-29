@@ -3071,7 +3071,8 @@ function computeVentaSinNdcDiario(){
     const dayKey=`${d.mes}|${d.day}`;
     if(!dias[dayKey])dias[dayKey]={mes:d.mes,day:d.day,tot:_mkEstadoRow(),clientes:{}};
     // Archivo 198: con mes elegido, remitos CREADOS en meses anteriores (FECHA < mes filtrado) van a MESES ANTERIORES
-    const campo=(mesFilter&&d.mesO&&d.mesO<mesFilter)?'anterior':_campoEstado(d.estado);
+    // Archivo 199: el Tránsito NUNCA va a MESES ANTERIORES (siempre queda visible en TRANSITO, en el día de su FEC. ACT. dentro del mes filtrado)
+    const campo=(d.estado!=='Transito'&&mesFilter&&d.mesO&&d.mesO<mesFilter)?'anterior':_campoEstado(d.estado);
     dias[dayKey].tot[campo]+=d.vta;
     if(!dias[dayKey].clientes[d.cliente])dias[dayKey].clientes[d.cliente]=_mkEstadoRow();
     dias[dayKey].clientes[d.cliente][campo]+=d.vta;
@@ -3200,13 +3201,13 @@ function renderVentaSinNdcDiariaBody(){
   // excluye desde computeVentaSinNdcDiario()), así que esta fila directamente no se renderiza
   // — desaparece de la lista, tal como se pidió.
   // Archivo 198: con mes elegido, el Tránsito de otros meses va a la columna MESES ANTERIORES de esta fila.
-  const _oc=v=>conAnterior?{firmada:0,ingresada:0,reparto:0,transito:0,anterior:v}:{firmada:0,ingresada:0,reparto:0,transito:v};
+  const _oc=v=>({firmada:0,ingresada:0,reparto:0,transito:v}); // archivo 199: el Tránsito de otros meses va en la columna TRANSITO
   const filaOtrosMeses=transitoOtrosMeses>0
     ?_filaDiaHtml(KEY_OTROS_MESES,'Tránsito de otros meses',_oc(transitoOtrosMeses),
         Object.fromEntries(Object.entries(clientesOtrosMeses).map(([c,v])=>[c,_oc(v)])),
         {especial:true,conAnterior})
     :'';
-  if(conAnterior)totGen.anterior+=transitoOtrosMeses; else totGen.transito+=transitoOtrosMeses;
+  totGen.transito+=transitoOtrosMeses;
   // Sin scroll interno (pedido 05/09/2026): la tabla crece con el contenido, sin
   // max-height/overflow-y — igual criterio que ya se usa en "Estado de remito" (archivo 125).
   // Switch "Sin tránsito" (pedido 10/09/2026, archivo 145): además de excluir los datos (ya
@@ -5340,3 +5341,6 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 198 - v198 desde 197: en el listado diario de la tarjeta "Venta activa gerencia" se agrega la columna MESES ANTERIORES justo a continuación de FECHA. Con un mes elegido, reúne todos los remitos creados en meses anteriores (FECHA < mes filtrado), incluido el Tránsito acumulado de otros meses (fila especial, estados en "—"); FIRMADA/INGRESADA/REPARTO/TRANSITO quedan sólo con remitos creados en el mes filtrado. TOTAL = MESES ANTERIORES + estados, y el Total general sigue coincidiendo con la tarjeta. Sin mes elegido la columna no se muestra. KPIVTA_ROWS guarda mesO (mes de FECHA). No se tocan las demás vistas. -->
 <!-- - breve descripcion de lo hecho: columna MESES ANTERIORES en el listado diario de Venta activa gerencia -->
+
+<!-- 199 - v199 desde 198: corrige el listado diario de "Venta activa gerencia" para que TODO el Tránsito quede a la vista. Antes (v198) el Tránsito de remitos creados en meses anteriores pero con FEC. ACT. en el mes filtrado se mezclaba dentro de MESES ANTERIORES (116.676.365 en octubre) y no coincidía con "Solo tránsito". Ahora: (1) todo remito en Tránsito con FEC. ACT. dentro del mes filtrado (o, si no tiene FEC. ACT., con FECHA dentro del mes) va a la columna TRANSITO en su día, sin importar el mes de creación; (2) todo el resto del Tránsito (fecha efectiva en otro mes) se acumula en la fila "Tránsito de otros meses", cuyo importe ahora se muestra en la columna TRANSITO; (3) MESES ANTERIORES queda sólo con Firmada/Ingresada/Reparto de remitos creados en meses anteriores. Así TRANSITO (columna total, incluida la fila de otros meses) = total de "Solo tránsito" (misma fecha efectiva: FEC. ACT. y, si está vacía, FECHA). Total general sin cambios. -->
+<!-- - breve descripcion de lo hecho: todo el Tránsito visible en TRANSITO + Tránsito de otros meses; MESES ANTERIORES sin Tránsito -->

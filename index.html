@@ -149,8 +149,10 @@ header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-be
    se basa en la captura de pantalla REAL que compartió el usuario (a diferencia del archivo
    116, que fue 100% teórico) y en el cálculo de ancho de caracteres para "$1.671.115.710" y
    "42.8%"/"-38.0%" contra el tamaño de fuente máximo ya fijado en el archivo 107. */
-.kpis{display:grid;grid-template-columns:1.5fr 1.5fr 1.1fr 1.1fr .95fr .95fr .95fr;gap:10px;margin-bottom:16px;align-items:stretch}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;align-items:stretch}
 .kpi .k-val.full{font-size:clamp(15px,1.6vw,20px);line-height:1.15;word-break:break-word}
+/* v202: importe de las 3 primeras tarjetas con el mismo tamaño que el % de Objetivo mensual (.kpi .k-val) */
+.kpi[data-card="ventaNdc"] .k-val.full,.kpi[data-card="ventaSinNdc"] .k-val.full,.kpi[data-card="remitidoMes"] .k-val.full{font-size:clamp(20px,2.6vw,30px);line-height:normal}
 .kpi-prog{margin-top:10px}
 .kpi-prog .prog-track{height:5px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;margin-top:4px}
 .kpi-prog .prog-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--acc),var(--acc-d));transition:width 1s cubic-bezier(.22,1,.36,1)}
@@ -718,6 +720,7 @@ const ESTREM_ROWS=[];
 // empGrupoFilter/empFilter/rubFilter igual que el resto del tablero. Ver processRawRows().
 // {mes,day,emp,rub,estado,cliente,vta}
 const KPIVTA_ROWS=[];
+const REMIT_ROWS=[]; // archivo 200: TODOS los remitos (cualquier estado) con mes de FECHA de creación, para la tarjeta "Remitido del mes"
 let estDiaActiva=null; // {grupo,dayKey} del día actualmente desplegado en "Estado de remito" (uno solo a la vez)
 // Clientes expandidos dentro del detalle de un día/bucket de "Estado de remito" (pedido
 // 27/08/2026: el detalle ahora agrupa por CLIENTE con su total, y sólo al hacer clic en un
@@ -901,6 +904,13 @@ function render(){
   // Las 4 tarjetas siguientes (Venta activa con NDCs, Venta activa sin NDCs, Clientes
   // únicos, Clientes nuevos) son clickeables desde el pedido 19/08/2026: despliegan un
   // listado de cliente + importe de mayor a menor — ver kpiActiveCard/renderKpiDetalle().
+  let _remitidoMes=0;
+  { let _r=REMIT_ROWS;
+    if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];_r=_r.filter(d=>_c.includes(d.emp));}
+    if(empFilter)_r=_r.filter(d=>d.emp===empFilter);
+    if(rubFilter)_r=_r.filter(d=>d.rub===rubFilter);
+    if(mesFilter)_r=_r.filter(d=>d.mesO===mesFilter);
+    _remitidoMes=_r.reduce((a,d)=>a+d.vta,0); }
   document.getElementById('kpis').innerHTML=
     `<div class="kpi acc pend-clickable" data-card="ventaNdc"><div class="k-lbl">Venta activa comercial</div>
       <div class="k-val full">${fmtFull(totalVtaNeto)}</div>
@@ -915,6 +925,12 @@ function render(){
     `<div class="kpi acc pend-clickable" data-card="ventaSinNdc"><div class="k-lbl">Venta activa gerencia</div>
       <div class="k-val full">${fmtFull(totalVtaSinNdcConTransito)}</div>
       <div class="k-sub">${empFilter||'todas las empresas'} · incl. Tránsito acumulado · sin NDCs</div></div>`+
+    // Archivo 200: "Remitido del mes" = importe de TODOS los remitos (cualquier estado) cuya FECHA de
+    // creación cae en el mes del filtro de Período (o todo el año si no hay mes). Bruto, sin NDC;
+    // respeta empresa y rubro.
+    `<div class="kpi acc pend-clickable" data-card="remitidoMes"><div class="k-lbl">Remitido del mes</div>
+      <div class="k-val full">${fmtFull(_remitidoMes)}</div>
+      <div class="k-sub">${empFilter||'todas las empresas'} · todos los estados · por fecha de remito · sin NDCs</div></div>`+
     objCard+momCard+
     `<div class="kpi mrg"><div class="k-lbl">Margen bruto</div>
       <div class="k-val">${fmtPct(margenAvg)}</div>
@@ -1678,7 +1694,7 @@ function processRawRows(rawRows, sourceName) {
   EJEC_ROWS.length=0;
   FAM_ROWS.length=0;
   ESTREM_ROWS.length=0;
-  KPIVTA_ROWS.length=0;
+  KPIVTA_ROWS.length=0; REMIT_ROWS.length=0;
   ORIG_CLI_ROWS.length=0;
   for(const k in REM_FECHA)delete REM_FECHA[k];
   ESTCLI_ROWS.length=0;
@@ -1732,6 +1748,7 @@ function processRawRows(rawRows, sourceName) {
     if(comp&&!_seenComp.has(_ck)){_seenComp.add(_ck);REMS_RAW.push({comp,estado,mes,emp,rawcli});}
     const cos = _n(r['COSTO IMPORTE']);
     const qty = _n(r['CANTIDAD']);
+    REMIT_ROWS.push({mesO:_fd.mes,dayO:_fd.day,emp,rub,vta,cliente:cli,comp,estado,prod:String(r['PRODUCTO']||'').trim(),qty}); // v203: + producto y cantidad; v201: + día de FECHA, cliente, nº de remito y estado para el detalle // archivo 200: todo lo remitido, cualquier estado, por FECHA de creación
     if(['Firmada','Ingresada','Reparto','Transito'].includes(estado)){
       // NUEVO — pedido 05/09/2026: detalle día a día para la tarjeta "Venta activa · sin
       // NDCs" (vista diaria/mensual). A diferencia del bloque de ESTREM_ROWS más abajo, este
@@ -3963,12 +3980,124 @@ async function captureVentaNdcImage(){
   }
 }
 
+// ── Archivo 201: detalle de la tarjeta "Remitido del mes" ───────────────────────────────────
+// Misma mecánica que "Venta activa comercial": Vista diaria / Vista clientes. Fuente: REMIT_ROWS
+// (todos los estados, por FECHA de creación, filtros de empresa/rubro/mes). Desplegables:
+//  · diaria: día → clientes (total remitido ese día) → remitos de ese cliente ese día;
+//  · clientes: cliente → remitos del cliente (con su fecha), en el período filtrado.
+let kpiRemVista='diaria';             // 'diaria' | 'clientes'
+const kpiRemAbiertos=new Set();       // claves abiertas: "d|mes|dia", "dc|mes|dia|cliente", "c|cliente"
+function remitidoRowsFiltradas(){
+  let r=REMIT_ROWS;
+  if(empGrupoFilter){const _c=EMP_GRUPOS[empGrupoFilter]||[];r=r.filter(d=>_c.includes(d.emp));}
+  if(empFilter)r=r.filter(d=>d.emp===empFilter);
+  if(rubFilter)r=r.filter(d=>d.rub===rubFilter);
+  if(mesFilter)r=r.filter(d=>d.mesO===mesFilter);
+  return r;
+}
+// Agrupa líneas de producto en remitos (por nº de comprobante) → [{comp,estado,mes,day,vta}]
+function _remitosDe(rows){
+  const m={};
+  rows.forEach(d=>{
+    const k=(d.comp||'(sin número)')+'|'+d.mesO+'|'+d.dayO;
+    if(!m[k])m[k]={comp:d.comp||'(sin número)',estado:d.estado,mes:d.mesO,day:d.dayO,vta:0,lines:[]};
+    m[k].vta+=d.vta; m[k].lines.push(d);
+  });
+  return Object.values(m).sort((a,b)=>b.vta-a.vta);
+}
+function _remFmtDay(mes,day){return `${String(day).padStart(2,'0')}-${MLBL[mes]||mes}`;}
+// v203: cada remito es desplegable (clic) y muestra sus productos con cantidad e importe.
+// ctx distingue la vista/contexto para que las claves de apertura no se pisen entre vistas.
+function _remRemitoRows(rows,indent,ctx){
+  return _remitosDe(rows).map(r=>{
+    const kr='r|'+ctx+'|'+r.comp+'|'+r.mes+'|'+r.day, open=kpiRemAbiertos.has(kr);
+    const prods={};
+    r.lines.forEach(l=>{const p=l.prod||'(sin producto)';(prods[p]=prods[p]||{q:0,v:0});prods[p].q+=(l.qty||0);prods[p].v+=l.vta;});
+    const pr=open?Object.entries(prods).sort((a,b)=>b[1].v-a[1].v).map(([p,x])=>`<tr style="border-bottom:1px solid var(--line)">
+      <td style="padding:2px 8px 2px ${indent+22}px;font-size:10.5px;color:var(--mut2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${p.replace(/"/g,'&quot;')}">${p}</td>
+      <td style="padding:2px 8px;text-align:right;font-size:10.5px;color:var(--mut2)">${x.q.toLocaleString('es-AR')}</td>
+      <td style="padding:2px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--mut2)">${fmtFull(x.v)}</td>
+    </tr>`).join(''):'';
+    return `<tr data-remkey="${encodeURIComponent(kr)}" style="cursor:pointer;border-bottom:1px solid var(--line);${open?'background:rgba(96,165,250,.06)':''}">
+    <td style="padding:3px 8px 3px ${indent}px;font-size:11px;color:var(--mut2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${r.comp} <span style="opacity:.7">· ${_remFmtDay(r.mes,r.day)} · ${r.estado}</span></td>
+    <td></td>
+    <td style="padding:3px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px">${fmtFull(r.vta)}</td>
+  </tr>${pr}`;}).join('');
+}
+function _remGrupoClientes(rows){
+  const m={};
+  rows.forEach(d=>{const c=d.cliente||'(sin cliente)';(m[c]=m[c]||[]).push(d);});
+  return Object.entries(m).map(([cliente,rs])=>({cliente,rs,tot:rs.reduce((a,d)=>a+d.vta,0),n:_remitosDe(rs).length})).sort((a,b)=>b.tot-a.tot);
+}
+const _remTr=(key,open,label,n,tot,{indent=8,bold=true,size=12,bg=true}={})=>`<tr data-remkey="${encodeURIComponent(key)}" style="cursor:pointer;border-bottom:1px solid var(--line);${open&&bg?'background:rgba(96,165,250,.08)':''}">
+    <td style="padding:${size>=12?6:4}px 8px ${size>=12?6:4}px ${indent}px;font-size:${size}px;${bold?'font-weight:600;':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${label}</td>
+    <td style="padding:4px 8px;text-align:right;font-size:11px;color:var(--mut2)">${n}</td>
+    <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:${size}px;font-weight:${bold?700:600}">${fmtFull(tot)}</td>
+  </tr>`;
+function renderRemitidoBody(){
+  const rows=remitidoRowsFiltradas();
+  if(!rows.length) return `<div style="font-size:12px;color:var(--mut)">Sin remitos para este período/filtro.</div>`;
+  let html='';
+  if(kpiRemVista==='diaria'){
+    const dias={};
+    rows.forEach(d=>{const k=d.mesO+'|'+d.dayO;(dias[k]=dias[k]||{mes:d.mesO,day:d.dayO,rs:[]}).rs.push(d);});
+    Object.values(dias).sort((a,b)=>a.mes===b.mes?a.day-b.day:(a.mes<b.mes?-1:1)).forEach(d=>{
+      const kd='d|'+d.mes+'|'+d.day, open=kpiRemAbiertos.has(kd);
+      const tot=d.rs.reduce((a,x)=>a+x.vta,0);
+      html+=_remTr(kd,open,_remFmtDay(d.mes,d.day),_remitosDe(d.rs).length,tot);
+      if(open) _remGrupoClientes(d.rs).forEach(c=>{
+        const kc='dc|'+d.mes+'|'+d.day+'|'+c.cliente, oc=kpiRemAbiertos.has(kc);
+        html+=_remTr(kc,oc,c.cliente,c.n,c.tot,{indent:24,bold:false,size:11.5,bg:false});
+        if(oc) html+=_remRemitoRows(c.rs,44,kc);
+      });
+    });
+  } else {
+    _remGrupoClientes(rows).forEach(c=>{
+      const kc='c|'+c.cliente, open=kpiRemAbiertos.has(kc);
+      html+=_remTr(kc,open,c.cliente,c.n,c.tot);
+      if(open) html+=_remRemitoRows(c.rs,28,kc);
+    });
+  }
+  const total=rows.reduce((a,d)=>a+d.vta,0), nTot=_remitosDe(rows).length;
+  const col1=kpiRemVista==='diaria'?'FECHA':'CLIENTE';
+  return `<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
+    <colgroup><col style="width:58%"><col style="width:14%"><col style="width:28%"></colgroup>
+    <thead><tr style="border-bottom:1px solid var(--line2)">
+      <th style="padding:5px 8px;text-align:left;font-weight:600">${col1}</th>
+      <th style="padding:5px 8px;text-align:right;font-weight:600" title="Cantidad de remitos; en los productos, unidades">REMITOS / CANT.</th>
+      <th style="padding:5px 8px;text-align:right;font-weight:600">IMPORTE</th>
+    </tr></thead>
+    <tbody>${html}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--line2);font-weight:700">
+      <td style="padding:6px 8px">Total remitido</td>
+      <td style="padding:6px 8px;text-align:right">${nTot}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(total)}</td>
+    </tr></tfoot></table>`;
+}
+function renderRemitidoDetalle(wrap){
+  const periodoTxt=mesFilter?(MLBL[mesFilter]||mesFilter):'año completo';
+  const sb=(v,l)=>`<button type="button" data-vista-rem="${v}" class="${kpiRemVista===v?'on':''}" style="padding:4px 10px;font-size:10.5px">${l}</button>`;
+  wrap.innerHTML=`<div class="card" id="remitidoCardBlock" style="margin-top:0;margin-bottom:14px">
+    <div class="c-head" style="margin-bottom:10px;align-items:center">
+      <span class="c-title">Remitido · ${empFilter||'todas las empresas'} · ${periodoTxt.toUpperCase()}<span class="seg" style="padding:3px;gap:2px;border-radius:8px;vertical-align:middle;margin-left:10px">${sb('diaria','Vista diaria')}${sb('clientes','Vista clientes')}</span></span>
+      <span class="c-note">${periodoTxt} · todos los estados · por fecha de remito</span>
+    </div>
+    ${renderRemitidoBody()}
+  </div>`;
+  wrap.querySelectorAll('button[data-vista-rem]').forEach(b=>{b.onclick=()=>{kpiRemVista=b.dataset.vistaRem;renderKpiDetalle();};});
+  wrap.querySelectorAll('tr[data-remkey]').forEach(tr=>{
+    tr.onclick=()=>{const k=decodeURIComponent(tr.dataset.remkey);if(kpiRemAbiertos.has(k))kpiRemAbiertos.delete(k);else kpiRemAbiertos.add(k);renderKpiDetalle();};
+  });
+}
+
+
 function renderKpiDetalle(){
   const wrap=document.getElementById('kpiDetalleWrap');
   if(!wrap) return;
   if(!kpiActiveCard){ wrap.innerHTML=''; return; }
   if(kpiActiveCard==='ventaSinNdc'){ renderVentaSinNdcDetalle(wrap); return; }
   if(kpiActiveCard==='ventaNdc'){ renderVentaNdcDetalle(wrap); return; }
+  if(kpiActiveCard==='remitidoMes'){ renderRemitidoDetalle(wrap); return; }
   const TITULOS={
     ventaNdc:'Venta activa comercial', ventaSinNdc:'Venta activa gerencia',
     cliUnicos:'Clientes activos', cliNuevos:'Clientes nuevos'
@@ -5344,3 +5473,15 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 199 - v199 desde 198: corrige el listado diario de "Venta activa gerencia" para que TODO el Tránsito quede a la vista. Antes (v198) el Tránsito de remitos creados en meses anteriores pero con FEC. ACT. en el mes filtrado se mezclaba dentro de MESES ANTERIORES (116.676.365 en octubre) y no coincidía con "Solo tránsito". Ahora: (1) todo remito en Tránsito con FEC. ACT. dentro del mes filtrado (o, si no tiene FEC. ACT., con FECHA dentro del mes) va a la columna TRANSITO en su día, sin importar el mes de creación; (2) todo el resto del Tránsito (fecha efectiva en otro mes) se acumula en la fila "Tránsito de otros meses", cuyo importe ahora se muestra en la columna TRANSITO; (3) MESES ANTERIORES queda sólo con Firmada/Ingresada/Reparto de remitos creados en meses anteriores. Así TRANSITO (columna total, incluida la fila de otros meses) = total de "Solo tránsito" (misma fecha efectiva: FEC. ACT. y, si está vacía, FECHA). Total general sin cambios. -->
 <!-- - breve descripcion de lo hecho: todo el Tránsito visible en TRANSITO + Tránsito de otros meses; MESES ANTERIORES sin Tránsito -->
+
+<!-- 200 - v200 desde 199: (1) la grilla de KPIs superiores pasa a 4 columnas: fila 1 = Venta activa comercial, Venta activa gerencia, NUEVA tarjeta "Remitido <mes>", Objetivo mensual; fila 2 = Vs. mes anterior, Margen bruto, Clientes activos, Clientes nuevos (las últimas 4 de las 7 originales pasan a la 2da fila). (2) Nueva tarjeta "Remitido del mes" a continuación de Venta activa gerencia: importe bruto de TODOS los remitos (cualquier estado: Firmada, Ingresada, Reparto, Tránsito, Pagada, Anulada) cuya FECHA de creación cae en el mes del filtro de Período (sin mes elegido: año completo); no usa FEC. ACT., no descuenta NDC y respeta los filtros de empresa y rubro. Nuevo arreglo REMIT_ROWS ({mesO,emp,rub,vta}) cargado en processRawRows. Sin otros cambios. -->
+<!-- - breve descripcion de lo hecho: KPIs en 2 filas de 4 + nueva tarjeta Remitido del mes -->
+
+<!-- 201 - v201 desde 200: la tarjeta "Remitido del mes" pasa a ser clickeable y despliega el detalle con la misma mecánica que "Venta activa comercial": botones Vista diaria / Vista clientes. Vista diaria: lista de días (por FECHA de remito) con cantidad de remitos e importe; clic en un día despliega los clientes con lo remitido ese día; clic en un cliente despliega los remitos (número, estado e importe) de ese cliente ese día. Vista clientes: lista de clientes con su total remitido en el período; clic en un cliente despliega sus remitos con fecha, estado e importe. Los desplegables son múltiples (se abren/cierran con clic). Criterio idéntico a la tarjeta: todos los estados, FECHA de creación, sin NDC, respeta filtros de mes/empresa/rubro; el total al pie coincide con el número de la tarjeta. REMIT_ROWS ahora guarda día, cliente, comprobante y estado. No se modificó ninguna otra funcionalidad (sin botón Capturar en esta tarjeta). -->
+<!-- - breve descripcion de lo hecho: detalle diario/clientes con remitos desplegables en la tarjeta Remitido del mes -->
+
+<!-- 202 - v202 desde 201: (1) la tarjeta KPI "Remitido <mes>" pasa a llamarse siempre "Remitido del mes" (ya no agrega el nombre del mes ni "año completo"). (2) El importe de las 3 primeras tarjetas (Venta activa comercial, Venta activa gerencia, Remitido del mes) usa exactamente el mismo tamaño de tipografía que el valor de la 4ta tarjeta Objetivo mensual (clamp(20px,2.6vw,30px)); regla CSS acotada a esas 3 tarjetas por data-card, el resto de tarjetas con .full (Notas, etc.) no cambia. -->
+<!-- - breve descripcion de lo hecho: nombre fijo Remitido del mes e importes con la misma tipografia que Objetivo mensual -->
+
+<!-- 203 - v203 desde 202: en el detalle de la tarjeta "Remitido del mes" se agrega un subnivel más de expansión en ambas vistas: clic en un remito despliega los productos que lo componen con cantidad (columna central) e importe; otro clic lo repliega. Vista diaria: día → cliente → remito → productos. Vista clientes: cliente → remito → productos. Todos los niveles se abren/cierran con un clic y se pueden abrir varios a la vez (kpiRemAbiertos). Los productos se agrupan por nombre dentro del remito. REMIT_ROWS guarda además producto y cantidad. Sin otros cambios. -->
+<!-- - breve descripcion de lo hecho: subnivel remito → productos con cantidades e importes en Remitido del mes -->

@@ -4030,7 +4030,7 @@ function _remGrupoClientes(rows){
   return Object.entries(m).map(([cliente,rs])=>({cliente,rs,tot:rs.reduce((a,d)=>a+d.vta,0),n:_remitosDe(rs).length})).sort((a,b)=>b.tot-a.tot);
 }
 const _remTr=(key,open,label,n,tot,{indent=8,bold=true,size=12,bg=true}={})=>`<tr data-remkey="${encodeURIComponent(key)}" style="cursor:pointer;border-bottom:1px solid var(--line);${open&&bg?'background:rgba(96,165,250,.08)':''}">
-    <td style="padding:${size>=12?6:4}px 8px ${size>=12?6:4}px ${indent}px;font-size:${size}px;${bold?'font-weight:600;':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${label}</td>
+    <td class="cli-nm" style="padding:${size>=12?6:4}px 8px ${size>=12?6:4}px ${indent}px;font-size:${size}px;${bold?'font-weight:600;':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${label}</td>
     <td style="padding:4px 8px;text-align:right;font-size:11px;color:var(--mut2)">${n}</td>
     <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:${size}px;font-weight:${bold?700:600}">${fmtFull(tot)}</td>
   </tr>`;
@@ -4080,16 +4080,82 @@ function renderRemitidoDetalle(wrap){
   wrap.innerHTML=`<div class="card" id="remitidoCardBlock" style="margin-top:0;margin-bottom:14px">
     <div class="c-head" style="margin-bottom:10px;align-items:center">
       <span class="c-title">Remitido · ${empFilter||'todas las empresas'} · ${periodoTxt.toUpperCase()}<span class="seg" style="padding:3px;gap:2px;border-radius:8px;vertical-align:middle;margin-left:10px">${sb('diaria','Vista diaria')}${sb('clientes','Vista clientes')}</span></span>
-      <span class="c-note">${periodoTxt} · todos los estados · por fecha de remito</span>
+      <span style="display:flex;align-items:center;gap:12px">
+        <span class="c-note">${periodoTxt} · todos los estados · por fecha de remito</span>
+        <button type="button" data-capture-rem="1" title="Capturar esta tabla como imagen (para pegar en WhatsApp)" style="display:inline-flex;align-items:center;gap:6px;padding:4px 9px;font-size:10.5px;font-weight:600;color:var(--tx);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;cursor:pointer;flex-shrink:0">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          <span class="captureBtnLbl">Capturar</span>
+        </button>
+      </span>
     </div>
     ${renderRemitidoBody()}
   </div>`;
+  const capRem=wrap.querySelector('button[data-capture-rem]'); if(capRem) capRem.onclick=()=>captureRemitidoImage();
   wrap.querySelectorAll('button[data-vista-rem]').forEach(b=>{b.onclick=()=>{kpiRemVista=b.dataset.vistaRem;renderKpiDetalle();};});
   wrap.querySelectorAll('tr[data-remkey]').forEach(tr=>{
     tr.onclick=()=>{const k=decodeURIComponent(tr.dataset.remkey);if(kpiRemAbiertos.has(k))kpiRemAbiertos.delete(k);else kpiRemAbiertos.add(k);renderKpiDetalle();};
   });
 }
 
+
+// Archivo 204: captura de imagen de "Remitido del mes" — copia de captureVentaNdcImage() (mismo html2canvas, portapapeles, fallback de descarga y modo compacto), apuntando a su propio bloque.
+async function captureRemitidoImage(){
+  const bloque=document.getElementById('remitidoCardBlock');
+  const btn=bloque?bloque.querySelector('button[data-capture-rem]'):null;
+  const lbl=btn?btn.querySelector('.captureBtnLbl'):null;
+  if(typeof html2canvas==='undefined'){
+    alert('No se pudo cargar la librería para generar la imagen (html2canvas) desde internet. Revisá tu conexión e intentá de nuevo — el resto del tablero funciona igual sin esto.');
+    return;
+  }
+  if(!bloque){
+    alert('No se encontró la tabla de Remitido del mes para capturar.');
+    return;
+  }
+  if(btn)btn.disabled=true;
+  if(lbl)lbl.textContent='Generando...';
+  const prevBtnDisplay=btn?btn.style.display:'';
+  if(btn)btn.style.display='none';
+  bloque.classList.add('capture-compact');
+  const _undoAutofit=_autofitCaptureCols(bloque);
+  try{
+    const bg=getComputedStyle(document.body).getPropertyValue('--panel').trim()||'#11141c';
+    const w=bloque.scrollWidth, h=bloque.scrollHeight;
+    const canvas=await html2canvas(bloque,{backgroundColor:bg,scale:2,useCORS:true,width:w,height:h});
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+    if(!blob){
+      alert('No se pudo generar la imagen. Probá de nuevo.');
+      return;
+    }
+    let copiado=false;
+    try{
+      if(navigator.clipboard&&window.ClipboardItem){
+        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        copiado=true;
+      }
+    }catch(e){ copiado=false; }
+    if(copiado){
+      if(lbl)lbl.textContent='¡Copiado! ✓';
+    } else {
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      const hoy=new Date();
+      const fechaStr=`${hoy.getFullYear()}${String(hoy.getMonth()+1).padStart(2,'0')}${String(hoy.getDate()).padStart(2,'0')}`;
+      const vistaStr=kpiRemVista==='diaria'?'diaria':'clientes';
+      a.href=url; a.download=`Remitido del mes - ${vistaStr} - ${fechaStr}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),3000);
+      if(lbl)lbl.textContent='Descargada ⬇';
+    }
+  }catch(err){
+    console.error('captureRemitidoImage error',err);
+    alert('No se pudo generar la imagen. Probá de nuevo.');
+  } finally {
+    if(_undoAutofit) _undoAutofit();
+    bloque.classList.remove('capture-compact');
+    if(btn){ btn.style.display=prevBtnDisplay; btn.disabled=false; }
+    setTimeout(()=>{ if(lbl)lbl.textContent='Capturar'; },2200);
+  }
+}
 
 function renderKpiDetalle(){
   const wrap=document.getElementById('kpiDetalleWrap');
@@ -5485,3 +5551,6 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 203 - v203 desde 202: en el detalle de la tarjeta "Remitido del mes" se agrega un subnivel más de expansión en ambas vistas: clic en un remito despliega los productos que lo componen con cantidad (columna central) e importe; otro clic lo repliega. Vista diaria: día → cliente → remito → productos. Vista clientes: cliente → remito → productos. Todos los niveles se abren/cierran con un clic y se pueden abrir varios a la vez (kpiRemAbiertos). Los productos se agrupan por nombre dentro del remito. REMIT_ROWS guarda además producto y cantidad. Sin otros cambios. -->
 <!-- - breve descripcion de lo hecho: subnivel remito → productos con cantidades e importes en Remitido del mes -->
+
+<!-- 204 - v204 desde 203: la tarjeta "Remitido del mes" ya tiene el botón Capturar en su listado desplegado (vista diaria y vista clientes), idéntico al de Venta activa comercial/gerencia: mismo estilo y comportamiento (html2canvas, copia al portapapeles, si no se puede descarga PNG "Remitido del mes - diaria|clientes - AAAAMMDD.png", oculta el botón y usa el modo compacto .capture-compact/autofit de columnas durante la captura, etiqueta Generando.../¡Copiado!/Descargada). Función nueva captureRemitidoImage() (copia de captureVentaNdcImage apuntando a #remitidoCardBlock / data-capture-rem). Las celdas de FECHA/CLIENTE llevan class cli-nm para el ancho máximo de captura. Sin otros cambios. -->
+<!-- - breve descripcion de lo hecho: boton Capturar en el listado de Remitido del mes -->

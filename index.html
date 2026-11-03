@@ -2609,7 +2609,7 @@ function processNdcRows(rawRows){
         EJEC_ROWS.push({mes,rawcli:cliRaw,emp,rub:null,vta:monto,cos:0,estado:'NDC'});
         // FECHA de la tabla de detalle = fecha de EMISIÓN de la nota (FECHA NCR), no la del
         // remito original — pedido 04/08/2026 (confirmado con el usuario, multiple choice).
-        NDC_DETAIL.ncr.push({numero:notaCredTxt||idNcr, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NCR']), importe:monto, mes, emp});
+        NDC_DETAIL.ncr.push({numero:notaCredTxt||idNcr, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NCR']), importe:monto, mes, dia, emp}); // v205: dia = día de la venta del remito (REM_FECHA)
         ncrRows++;
         }
       }
@@ -2622,7 +2622,7 @@ function processNdcRows(rawRows){
       NDC_MES_AGG[mes][emp].ndbTotal+=monto; NDC_MES_AGG[mes][emp].ndbCount++;
       _applyOrig(monto);
       EJEC_ROWS.push({mes,rawcli:cliRaw,emp,rub:null,vta:monto,cos:0,estado:'NDC'});
-      NDC_DETAIL.ndb.push({numero:String(r['NOTA DE DEBITO']||'').trim()||idDb, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NDB']), importe:monto, mes, emp});
+      NDC_DETAIL.ndb.push({numero:String(r['NOTA DE DEBITO']||'').trim()||idDb, cliente:cliRaw, fecha:parseFechaNdc(r['FECHA NDB']), importe:monto, mes, dia, emp});
       ndbRows++;
       }
     }
@@ -3716,14 +3716,15 @@ async function captureVentaSinNdcImage(){
 // NDC de esta tarjeta respeta mesFilter exactamente igual que Firmada/Ingresada/Reparto (ver
 // ndcAdjVenta/ndcNetForMonth: mesesScope=mesFilter?[mesFilter]:MESES) — por eso no hace falta
 // ninguna fila especial de "NDC de otros meses": ese concepto no existe para esta tarjeta.
-const _mkEstadoRowNdc=()=>({firmada:0,ingresada:0,reparto:0,ndc:0});
-const _totEstadoRowNdc=r=>r.firmada+r.ingresada+r.reparto+r.ndc;
+// anterior (v206): remitos creados en meses anteriores al mes filtrado (columna MESES ANTERIORES, igual que en Venta activa gerencia)
+const _mkEstadoRowNdc=()=>({firmada:0,ingresada:0,reparto:0,ndc:0,anterior:0});
+const _totEstadoRowNdc=r=>r.firmada+r.ingresada+r.reparto+r.ndc+(r.anterior||0);
 
 // Fila de "día" para esta tarjeta — mismo mecanismo de expandir/colapsar que _filaDiaHtml de
 // la otra tarjeta (vía data-daykey-ndc en vez de data-daykey, para no pisarse si algún día
 // conviviera con la otra tabla), pero con columna NDC en vez de TRANSITO y sin el flag
 // "especial" (acá no hay ninguna fila que no sea un día real).
-function _filaDiaHtmlNdc(key,label,tot,clientesMap){
+function _filaDiaHtmlNdc(key,label,tot,clientesMap,conAnterior=false){
   const open=kpiDiaNdcActivo===key;
   const cel=(v)=>`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px">${v?fmtFull(v):'—'}</td>`;
   const celCli=(v)=>`<td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px">${v?fmtFull(v):'—'}</td>`;
@@ -3733,12 +3734,12 @@ function _filaDiaHtmlNdc(key,label,tot,clientesMap){
   const clienteRows=open?clientesList.map(c=>`<tr style="border-bottom:1px solid var(--line)">
     <td></td>
     <td class="cli-nm" style="padding:4px 8px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.cliente||'(sin cliente)'}</td>
-    ${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${celCli(c.ndc)}
+    ${conAnterior?celCli(c.anterior):''}${celCli(c.firmada)}${celCli(c.ingresada)}${celCli(c.reparto)}${celCli(c.ndc)}
     <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600">${fmtFull(c.total)}</td>
   </tr>`).join(''):'';
   return `<tr data-daykey-ndc="${key}" style="cursor:pointer;border-bottom:1px solid var(--line);${open?'background:rgba(96,165,250,.08)':''}">
     <td colspan="2" style="padding:6px 8px;font-size:12px;font-weight:600">${open?'▾':'▸'} ${label}</td>
-    ${cel(tot.firmada)}${cel(tot.ingresada)}${cel(tot.reparto)}${cel(tot.ndc)}
+    ${conAnterior?cel(tot.anterior):''}${cel(tot.firmada)}${cel(tot.ingresada)}${cel(tot.reparto)}${cel(tot.ndc)}
     <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700">${fmtFull(_totEstadoRowNdc(tot))}</td>
   </tr>${clienteRows}`;
 }
@@ -3758,7 +3759,8 @@ function computeVentaNdcDiario(){
     if(!dentroDelMes) return;
     const dayKey=`${d.mes}|${d.day}`;
     if(!dias[dayKey])dias[dayKey]={mes:d.mes,day:d.day,tot:_mkEstadoRowNdc(),clientes:{}};
-    const campo=_campoEstado(d.estado); // sólo 'firmada'/'ingresada'/'reparto' (Transito ya excluido)
+    // v206: con mes elegido, remitos CREADOS en meses anteriores (FECHA < mes filtrado) van a MESES ANTERIORES
+    const campo=(mesFilter&&d.mesO&&d.mesO<mesFilter)?'anterior':_campoEstado(d.estado);
     dias[dayKey].tot[campo]+=d.vta;
     if(!dias[dayKey].clientes[d.cliente])dias[dayKey].clientes[d.cliente]=_mkEstadoRowNdc();
     dias[dayKey].clientes[d.cliente][campo]+=d.vta;
@@ -3772,8 +3774,11 @@ function computeVentaNdcDiario(){
       if(!mesesScope.includes(n.mes)) return;
       if(empGrupoFilter && !(EMP_GRUPOS[empGrupoFilter]||[]).includes(n.emp)) return;
       if(empFilter && n.emp!==empFilter) return;
-      if(!n.fecha) return; // nota sin fecha parseable: no se puede ubicar en un día puntual
-      const day=n.fecha.getDate();
+      // v205: la NDC va al MISMO día (y mes) de la venta de su remito (FEC. ACT. o FECHA, vía REM_FECHA), no al
+      // día de emisión de la nota — antes se combinaba el mes del remito con el día de emisión y podía
+      // quedar una fecha inexistente (ej. "29-Nov" para una nota emitida el 29/10 sobre un remito del 02/11).
+      const day=n.dia||(n.fecha?n.fecha.getDate():null);
+      if(!day) return; // sin día de remito ni fecha de nota: no se puede ubicar en un día puntual
       const dayKey=`${n.mes}|${day}`;
       if(!dias[dayKey])dias[dayKey]={mes:n.mes,day,tot:_mkEstadoRowNdc(),clientes:{}};
       dias[dayKey].tot.ndc+=n.importe;
@@ -3822,18 +3827,20 @@ function renderVentaNdcDiariaBody(){
     return `<div style="font-size:12px;color:var(--mut)">Sin datos para este período/filtro.</div>`;
   }
   const fmtDay=k=>{const[mes,day]=k.split('|');return `${day.toString().padStart(2,'0')}-${(MLBL[mes]||mes)}`;};
+  const conAnterior=!!mesFilter; // v206: columna MESES ANTERIORES sólo con un mes elegido
   const totGen=_mkEstadoRowNdc();
   const rowsHtml=dayKeys.map(k=>{
     const d=dias[k];
     totGen.firmada+=d.tot.firmada; totGen.ingresada+=d.tot.ingresada;
-    totGen.reparto+=d.tot.reparto; totGen.ndc+=d.tot.ndc;
-    return _filaDiaHtmlNdc(k,fmtDay(k),d.tot,d.clientes);
+    totGen.reparto+=d.tot.reparto; totGen.ndc+=d.tot.ndc; totGen.anterior+=d.tot.anterior;
+    return _filaDiaHtmlNdc(k,fmtDay(k),d.tot,d.clientes,conAnterior);
   }).join('');
   // Sin scroll interno, mismo criterio que la otra tarjeta desde el archivo 132.
   return `<table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
-      <colgroup><col style="width:12%"><col style="width:26%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:10%"></colgroup>
+      <colgroup>${conAnterior?'<col style="width:9%"><col style="width:19%"><col style="width:14%"><col style="width:14%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:11%">':'<col style="width:12%"><col style="width:26%"><col style="width:14%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:10%">'}</colgroup>
       <thead><tr style="border-bottom:1px solid var(--line2)">
         <th colspan="2" style="padding:5px 8px;text-align:left;font-weight:600">FECHA</th>
+        ${conAnterior?'<th style="padding:5px 8px;text-align:right;font-weight:600" title="Remitos creados en meses anteriores al mes filtrado">MESES ANTERIORES</th>':''}
         <th style="padding:5px 8px;text-align:right;font-weight:600">FIRMADA</th>
         <th style="padding:5px 8px;text-align:right;font-weight:600">INGRESADA</th>
         <th style="padding:5px 8px;text-align:right;font-weight:600">REPARTO</th>
@@ -3843,6 +3850,7 @@ function renderVentaNdcDiariaBody(){
       <tbody>${rowsHtml}</tbody>
       <tfoot><tr style="border-top:2px solid var(--line2);font-weight:700">
         <td colspan="2" style="padding:6px 8px">Total general</td>
+        ${conAnterior?`<td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.anterior)}</td>`:''}
         <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.firmada)}</td>
         <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.ingresada)}</td>
         <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">${fmtFull(totGen.reparto)}</td>
@@ -5554,3 +5562,9 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 204 - v204 desde 203: la tarjeta "Remitido del mes" ya tiene el botón Capturar en su listado desplegado (vista diaria y vista clientes), idéntico al de Venta activa comercial/gerencia: mismo estilo y comportamiento (html2canvas, copia al portapapeles, si no se puede descarga PNG "Remitido del mes - diaria|clientes - AAAAMMDD.png", oculta el botón y usa el modo compacto .capture-compact/autofit de columnas durante la captura, etiqueta Generando.../¡Copiado!/Descargada). Función nueva captureRemitidoImage() (copia de captureVentaNdcImage apuntando a #remitidoCardBlock / data-capture-rem). Las celdas de FECHA/CLIENTE llevan class cli-nm para el ancho máximo de captura. Sin otros cambios. -->
 <!-- - breve descripcion de lo hecho: boton Capturar en el listado de Remitido del mes -->
+
+<!-- 205 - v205 desde 204: corrige la tabla diaria de "Venta activa comercial" (computeVentaNdcDiario): las notas de crédito/débito ahora se ubican en el día de la venta de su remito (FEC. ACT., o FECHA si está vacía) y no en el día de emisión de la nota. Antes combinaba el MES del remito con el DÍA de emisión de la nota y podía mostrar fechas inexistentes (ej. dos NCR de PARTO SA emitidas el 29/10 sobre remitos con FEC. ACT. 02/11 aparecían en "29-Nov"; ahora aparecen en "02-Nov"). NDC_DETAIL.ncr/ndb guardan el nuevo campo dia (día de REM_FECHA). Los totales no cambian (mismo mes, mismo importe); sólo cambia en qué día se muestra cada nota. "Venta activa gerencia" no se toca: no incluye NDC. Las tablas de Notas de Crédito/Débito siguen mostrando la fecha de emisión real de cada nota. -->
+<!-- - breve descripcion de lo hecho: las NDC de la tabla diaria de Venta activa comercial van al dia de venta de su remito -->
+
+<!-- 206 - v206 desde 205: en la tabla desplegada (Vista diaria) de "Venta activa comercial" se agrega la columna MESES ANTERIORES justo a continuación de FECHA, con el mismo criterio que ya tiene "Venta activa gerencia" (v198): con un mes elegido, reúne los remitos Firmada/Ingresada/Reparto creados en meses anteriores (FECHA < mes filtrado) que cambiaron de estado dentro del mes, en el día de su FEC. ACT.; FIRMADA/INGRESADA/REPARTO quedan sólo con remitos creados en el mes filtrado; la columna NDC no cambia (notas en el día de venta de su remito, v205). TOTAL = MESES ANTERIORES + estados + NDC, el Total general sigue coincidiendo con la tarjeta. Sin mes elegido la columna no se muestra. Al desplegar un día se ve también por cliente. No se modificó la Vista clientes ni otras tablas. -->
+<!-- - breve descripcion de lo hecho: columna MESES ANTERIORES en la tabla diaria de Venta activa comercial -->

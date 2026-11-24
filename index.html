@@ -1960,6 +1960,9 @@ let PEND_LINES_BY_NUM={}; // { numeroPedido: [{codigo,producto,cantidad,costo,pr
 // colapsar -- ver comentario en renderBajaUtilidadDetalle() más abajo.
 const pendPedidoExpandido=new Set();
 let pendActiveCard=null; // 'ok' | 'vencidos' | 'todos' | 'bajaUtilidad' | null
+let pendSortManual=false; // v209: true si el usuario eligió un orden desde un encabezado; false = orden por defecto (rubro: clientes por cant. de pedidos; pedidos por días)
+const pendClienteAbierto=new Set(); // v208: clientes desplegados en el listado agrupado por cliente
+let pendRubroFiltro=null; // v207: subfiltro por RUBRO de las 3 primeras tarjetas de Pedidos pendientes (null = todos los rubros)
 let pendSortCol='total'; // columna activa de orden
 let pendSortDir='desc'; // 'asc' | 'desc'
 // Tarjeta "Baja utilidad" (pedido 10/09/2026): 4ta tarjeta de "Pedidos pendientes de
@@ -2110,6 +2113,9 @@ function renderPendientes(){
 
 function togglePendDetalle(card){
   pendActiveCard=(pendActiveCard===card)?null:card;
+  pendRubroFiltro=null; // v207: al abrir/cambiar/cerrar una tarjeta se limpia el subfiltro de rubro
+  pendClienteAbierto.clear(); // v208
+  pendSortManual=false; // v209
   document.querySelectorAll('#pendientesKpis .kpi').forEach(el=>{
     el.classList.toggle('pend-card-on', el.dataset.card===pendActiveCard);
   });
@@ -2193,6 +2199,17 @@ function renderPendientesDetalle(){
   if(pendActiveCard==='ok'){ rows=PEND_LIST.filter(p=>p.dias<=45); titulo='Pedidos pendientes · menor a 45 días'; }
   else if(pendActiveCard==='vencidos'){ rows=PEND_LIST.filter(p=>p.dias>45); titulo='Pedidos vencidos · mayor a 45 días'; }
   else { rows=PEND_LIST.slice(); titulo='Todos los pedidos pendientes'; }
+  // v207: subfiltro por RUBRO — totales por rubro del conjunto de la tarjeta (sin filtrar) y, si hay un
+  // rubro elegido, el listado muestra sólo ese rubro. Clic de nuevo en el rubro (o en "Todos") lo quita.
+  const _rubTot={};
+  rows.forEach(p=>{const k=p.rubro||'—';(_rubTot[k]=_rubTot[k]||{v:0,n:0});_rubTot[k].v+=p.total;_rubTot[k].n++;});
+  if(pendRubroFiltro&&!_rubTot[pendRubroFiltro]) pendRubroFiltro=null;
+  const _totTarjeta=rows.reduce((a,p)=>a+p.total,0), _nTarjeta=rows.length;
+  if(pendRubroFiltro) rows=rows.filter(p=>(p.rubro||'—')===pendRubroFiltro);
+  const _chip=(key,label,v,n,on)=>`<button type="button" data-rubro-chip="${encodeURIComponent(key)}" style="cursor:pointer;text-align:left;padding:8px 14px;border-radius:10px;border:1px solid ${on?'var(--acc)':'var(--line2)'};background:${on?'rgba(96,165,250,.14)':'var(--panel2)'};color:var(--tx);font-family:inherit;min-width:150px">
+      <div style="font-size:10.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em">${label} · ${n.toLocaleString('es-AR')} ped.</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;margin-top:2px">$${Math.round(v).toLocaleString('es-AR')}</div></button>`;
+  const rubroChipsHtml=`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">${Object.entries(_rubTot).sort((a,b)=>b[1].v-a[1].v).map(([k,x])=>_chip(k,k,x.v,x.n,pendRubroFiltro===k)).join('')}</div>`;
   const ELP={'CZ_LST':'LST','CZ_LST2':'LST2','CZ_VMT':'VMT','CZ_VMT2':'VMT2','CZ_CDH':'CDH'};
   const sorters={
     num:(a,b)=>String(a.num).localeCompare(String(b.num),'es'),
@@ -2204,7 +2221,17 @@ function renderPendientesDetalle(){
     total:(a,b)=>a.total-b.total
   };
   const cmp=sorters[pendSortCol]||sorters.total;
-  rows=rows.slice().sort((a,b)=>pendSortDir==='asc'?cmp(a,b):-cmp(a,b));
+  // v209: orden por defecto de los pedidos dentro de cada cliente: DÍAS pendientes de mayor a menor (si el usuario no eligió un orden en un encabezado)
+  rows=rows.slice().sort(pendSortManual?((a,b)=>pendSortDir==='asc'?cmp(a,b):-cmp(a,b)):((a,b)=>b.dias-a.dias||b.total-a.total));
+  // v208: el listado se agrupa por CLIENTE (suma total de importe y cantidad de pedidos); clic en el cliente despliega sus
+  // pedidos (con las columnas de siempre) y clic en un pedido despliega sus productos. Orden de clientes: por cliente
+  // (columna CLIENTE) o por importe total (resto de columnas = orden de los pedidos dentro de cada cliente).
+  const _mapCli={};
+  rows.forEach(p=>{const k=p.rso||'(sin cliente)';(_mapCli[k]=_mapCli[k]||{cli:k,rs:[],total:0});_mapCli[k].rs.push(p);_mapCli[k].total+=p.total;});
+  // v210: se revierte el orden por cantidad de pedidos de la v209 — clientes por IMPORTE total de mayor a menor (también con rubro elegido)
+  const _gruposCli=Object.values(_mapCli).sort(pendSortCol==='rso'
+    ?(a,b)=>(pendSortDir==='asc'?1:-1)*String(a.cli).localeCompare(String(b.cli),'es')
+    :(pendSortCol==='total'?(a,b)=>(pendSortDir==='asc'?1:-1)*(a.total-b.total):(a,b)=>b.total-a.total));
   const fmtV=v=>Math.round(v).toLocaleString('es-AR');
   const mn2=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const arrow=col=>pendSortCol===col?(pendSortDir==='asc'?' ▲':' ▼'):'';
@@ -2219,37 +2246,55 @@ function renderPendientesDetalle(){
     {key:'total', label:'IMPORTE',   w:'18%', align:'right'}
   ];
   wrap.innerHTML=`<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
-    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">${titulo} · ${rows.length.toLocaleString('es-AR')} pedidos</div>
+    ${rubroChipsHtml}
+    <div style="font-size:11.5px;color:var(--mut2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">${titulo}${pendRubroFiltro?' · rubro '+pendRubroFiltro:''} · ${_gruposCli.length.toLocaleString('es-AR')} clientes · ${rows.length.toLocaleString('es-AR')} pedidos</div>
     <div>
       <table class="tbl" style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px">
         <colgroup>${cols.map(c=>`<col style="width:${c.w}">`).join('')}</colgroup>
         <thead><tr style="border-bottom:1px solid var(--line2)">
           ${cols.map(c=>`<th data-col="${c.key}" style="padding:5px 8px;text-align:${c.align};font-weight:600;cursor:pointer;user-select:none;color:${thCol(c.key)}">${c.label}${arrow(c.key)}</th>`).join('')}
         </tr></thead>
-        <tbody>${rows.map(p=>{
-          const diaCol=p.dias>45?'#f87171':'var(--tx)';
-          const fechaStr=`${p.fecha.getDate()} ${mn2[p.fecha.getMonth()]} ${p.fecha.getFullYear()}`;
-          const empDisp=ELP[p.emp]||p.emp||'—';
-          const open=pendPedidoExpandido.has(p.num);
-          return `<tr data-pedido-num="${p.num}" style="cursor:pointer;border-bottom:1px solid var(--line)${open?';background:rgba(96,165,250,.08)':''}">
-            <td style="padding:5px 8px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${p.num}</td>
-            <td style="padding:5px 8px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.rso||'—'}</td>
+        <tbody>${_gruposCli.map(g=>{
+          const abierto=pendClienteAbierto.has(g.cli);
+          const filaCli=`<tr data-pend-cli="${encodeURIComponent(g.cli)}" style="cursor:pointer;border-bottom:1px solid var(--line)${abierto?';background:rgba(96,165,250,.08)':''}">
+            <td colspan="2" style="padding:6px 8px;text-align:left;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${abierto?'▾':'▸'} ${g.cli}</td>
+            <td colspan="3" style="padding:6px 8px;text-align:center;font-size:11px;color:var(--mut2)">${g.rs.length.toLocaleString('es-AR')} ${g.rs.length===1?'pedido':'pedidos'}</td>
+            <td style="padding:6px 8px"></td>
+            <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700">$${fmtV(g.total)}</td>
+          </tr>`;
+          if(!abierto) return filaCli;
+          return filaCli+g.rs.map(p=>{
+            const diaCol=p.dias>45?'#f87171':'var(--tx)';
+            const fechaStr=`${p.fecha.getDate()} ${mn2[p.fecha.getMonth()]} ${p.fecha.getFullYear()}`;
+            const empDisp=ELP[p.emp]||p.emp||'—';
+            const open=pendPedidoExpandido.has(p.num);
+            return `<tr data-pedido-num="${p.num}" style="cursor:pointer;border-bottom:1px solid var(--line)${open?';background:rgba(96,165,250,.08)':''}">
+            <td style="padding:5px 8px 5px 24px;text-align:left;font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${open?'▾':'▸'} ${p.num}</td>
+            <td style="padding:5px 8px"></td>
             <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${fechaStr}</td>
             <td style="padding:5px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${diaCol}">${p.dias}</td>
             <td style="padding:5px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.rubro||'—'}</td>
             <td style="padding:5px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${empDisp}</td>
             <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace">$${fmtV(p.total)}</td>
           </tr>${_pedidoLineasHtml(p.num,7)}`;
+          }).join('');
         }).join('')}</tbody>
       </table>
     </div>
   </div>`;
+  wrap.querySelectorAll('tr[data-pend-cli]').forEach(tr=>{
+    tr.onclick=()=>{const k=decodeURIComponent(tr.dataset.pendCli);if(pendClienteAbierto.has(k))pendClienteAbierto.delete(k);else pendClienteAbierto.add(k);renderPendientesDetalle();};
+  });
+  wrap.querySelectorAll('button[data-rubro-chip]').forEach(b=>{
+    b.onclick=()=>{const k=decodeURIComponent(b.dataset.rubroChip);pendRubroFiltro=(!k||pendRubroFiltro===k)?null:k;pendClienteAbierto.clear();pendSortManual=false;renderPendientesDetalle();};
+  });
   _wirePedidoRowClicks(wrap);
   wrap.querySelectorAll('th[data-col]').forEach(th=>{
     th.onclick=()=>{
       const col=th.dataset.col;
       if(pendSortCol===col){ pendSortDir=pendSortDir==='asc'?'desc':'asc'; }
       else { pendSortCol=col; pendSortDir='desc'; }
+      pendSortManual=true; // v209
       renderPendientesDetalle();
     };
   });
@@ -5568,3 +5613,15 @@ function renderUtilidadAnualFamilias(){
 
 <!-- 206 - v206 desde 205: en la tabla desplegada (Vista diaria) de "Venta activa comercial" se agrega la columna MESES ANTERIORES justo a continuación de FECHA, con el mismo criterio que ya tiene "Venta activa gerencia" (v198): con un mes elegido, reúne los remitos Firmada/Ingresada/Reparto creados en meses anteriores (FECHA < mes filtrado) que cambiaron de estado dentro del mes, en el día de su FEC. ACT.; FIRMADA/INGRESADA/REPARTO quedan sólo con remitos creados en el mes filtrado; la columna NDC no cambia (notas en el día de venta de su remito, v205). TOTAL = MESES ANTERIORES + estados + NDC, el Total general sigue coincidiendo con la tarjeta. Sin mes elegido la columna no se muestra. Al desplegar un día se ve también por cliente. No se modificó la Vista clientes ni otras tablas. -->
 <!-- - breve descripcion de lo hecho: columna MESES ANTERIORES en la tabla diaria de Venta activa comercial -->
+
+<!-- 207 - v207 desde 206: en "Pedidos pendientes de facturar", al hacer clic en las 3 primeras tarjetas (Pedidos pendientes, Pendientes activos/todos, Vencidos +45 días) se muestra, entre las tarjetas y el listado, una franja de subfiltro por RUBRO con una chip "Todos" y una por rubro (Catering, Papelera, Otros, etc.), cada una con su cantidad de pedidos y suma de importe (ordenadas de mayor a menor). Clic en un rubro filtra el listado para mostrar SOLAMENTE ese rubro (el título indica el rubro); clic de nuevo en el rubro o en "Todos" quita el filtro. Los totales por rubro son siempre los de toda la tarjeta (no cambian al filtrar). El subfiltro se limpia al abrir/cambiar/cerrar tarjeta. Las columnas, orden, despliegue de productos por pedido y la tarjeta Baja utilidad no se modificaron. Nueva variable pendRubroFiltro. -->
+<!-- - breve descripcion de lo hecho: subfiltro por rubro con totales en las tarjetas de Pedidos pendientes de facturar -->
+
+<!-- 208 - v208 desde 207: (1) se elimina el botón "Todos" (con el total de la tarjeta) de la franja de subfiltro por RUBRO en Pedidos pendientes de facturar; para quitar el filtro se vuelve a hacer clic en el rubro elegido. (2) El listado de las 3 primeras tarjetas ahora se agrupa por CLIENTE: cada fila muestra el cliente, la cantidad de pedidos y la suma total de importe (ordenado por importe de mayor a menor, o por nombre/importe desde los encabezados CLIENTE/IMPORTE); clic en un cliente despliega sus pedidos con las columnas de siempre (N° pedido, fecha, días, rubro, empresa, importe; los otros encabezados ordenan los pedidos dentro de cada cliente) y clic en un pedido despliega sus productos como antes. Se pueden abrir varios clientes a la vez; clic de nuevo los repliega. Respeta el subfiltro de rubro (totales por cliente sólo del rubro elegido). La tarjeta Baja utilidad no se modificó. Nueva variable pendClienteAbierto. -->
+<!-- - breve descripcion de lo hecho: sin chip Todos y listado de pedidos pendientes agrupado por cliente con detalle desplegable -->
+
+<!-- 209 - v209 desde 208: orden por defecto en el listado de Pedidos pendientes de facturar (las 3 primeras tarjetas: Pedidos pendientes, Pendientes activos y Vencidos +45 días). (1) Al hacer clic en un chip de RUBRO, los clientes quedan ordenados de mayor a menor por CANTIDAD de pedidos (desempate por importe). Sin rubro elegido siguen por importe como en la v208. (2) Al desplegar un cliente, sus pedidos quedan ordenados de mayor a menor por DÍAS pendientes (desempate por importe). Si el usuario hace clic en un encabezado de columna, ese orden manual reemplaza al por defecto; al abrir/cambiar/cerrar tarjeta o al elegir/quitar un rubro se vuelve al orden por defecto (pendSortManual). Baja utilidad no se modificó. -->
+<!-- - breve descripcion de lo hecho: orden por defecto de clientes por cant. de pedidos al elegir rubro y de pedidos por dias pendientes -->
+
+<!-- 210 - v210 desde 209: se revierte el cambio (1) de la v209: con un rubro elegido, el listado de clientes vuelve a ordenarse por IMPORTE de suma total de mayor a menor (igual que sin rubro, como en la v208), y ya no por cantidad de pedidos. Se mantiene el cambio (2) de la v209: los pedidos de cada cliente desplegado van de mayor a menor por DÍAS pendientes. Los encabezados CLIENTE/IMPORTE siguen permitiendo ordenar manualmente. -->
+<!-- - breve descripcion de lo hecho: clientes ordenados por importe total de mayor a menor tambien con rubro elegido -->
